@@ -100,8 +100,78 @@ L1 matching, median differences và cộng dồn giữ theo code gốc. Bản n�
   các chỉnh sửa sau ngày origin; chưa phải mô phỏng dự báo thời gian thực.
 - Giữ tất cả cadence/scale trong synthetic library theo luồng embedding code gốc,
   không tự chuyển monthly thành weekly.
-- Chưa có khoảng dự báo, online MLE dispersion, WIS hoặc so sánh COVIDHub ensemble.
+- Chế độ mặc định chỉ dự báo điểm; bật `--probabilistic` để học dispersion và tính WIS.
+  Chưa so sánh COVIDHub ensemble.
 
-Sau bước kiểm chứng point forecast, phần kế tiếp là học dispersion từ những
-forecast đã có outcome tại origin, sinh quantile forecast và đánh giá WIS;
-sau đó mới so sánh đầy đủ với các baseline của bài báo trên dữ liệu as-of.
+Bước dispersion và WIS đã có trong chế độ bên dưới. Phần còn lại để tái hiện đầy
+đủ là dữ liệu as-of, prehistory calibration, cấu hình thư viện lớn và so sánh
+các model COVIDHub của bài báo.
+
+
+## Bước 3 — khoảng dự báo, online dispersion và WIS
+
+```bash
+.venv/bin/python experiments/forecasting/run_backtest.py \
+  --synthetic outputs/synthetic_demo/curves.csv \
+  --truth outputs/truth/California.csv \
+  --probabilistic --interval-draws 5000 --seed 13 \
+  --max-origins 0 --output-dir outputs/backtest_california_wis
+```
+
+Dùng cùng dữ liệu và point forecasts của bước 2. `--probabilistic` hỗ trợ h từ
+1 tới 4. Các tham số khởi tạo theo horizon là NB size `[20, 10, 6, 0.3]`.
+Trong 6 origins đầu, mean lấy point+1; sau đó mean lấy point và size được fit
+riêng từng horizon bằng maximum likelihood, tối ưu inverse-size trong (0,1].
+Cận số học inverse-size nhỏ nhất là `1e-8`, gần giới hạn Poisson.
+
+Tại origin đang xét, chỉ các forecast từ origins trước có `target_end_date <=
+origin` được dùng để học. Giữ quy tắc trong nguồn gốc: khi forecast cũ <100,
+mean trong hàm likelihood được thay bằng observed value. Khi có dữ liệu as-of,
+observed value này cũng cần là giá trị đã biết tại ngày origin.
+
+Mỗi horizon lấy 5.000 mẫu NB, tính quantile `[0.025, 0.1, 0.25, 0.5, 0.75, 0.9,
+0.975]`, rồi dịch trung vị về point forecast. Giữ cách dịch của tác giả, nên cận
+dưới có thể âm; không clip lại trước chấm điểm. NumPy RNG có seed riêng theo
+ngày origin, horizon và model, giúp giữ kết quả của cùng origin khi đổi số mốc
+chạy. Không khớp từng số với Monte Carlo của R.
+
+WIS dùng công thức `2 * mean(pinball loss)` trên bảy quantile, cùng định nghĩa
+trong helper gốc. Xuất sharpness, overprediction, underprediction và coverage
+50/80/95%; coverage dùng `lower < actual <= upper` theo nguồn.
+
+Output bổ sung:
+
+- `quantiles.csv`: bảng dài của sMOA và persistence.
+- `forecasts.csv`: thêm NB size, chế độ initial/mle, số outcome calibration,
+  WIS, các thành phần và coverage của mỗi model.
+- `summary.json`: trung bình các chỉ số, tổng và theo horizon.
+
+Baseline persistence được học dispersion riêng, dùng cùng lịch calibration và
+quy tắc NB; đây là baseline chẩn đoán bổ sung của project, không phải COVIDHub
+ensemble. Pipeline chưa nạp forecast prehistory trước `--start-date`, nên lịch
+chuyển sang MLE không khớp thí nghiệm đầy đủ của tác giả, vốn nạp early-pandemic
+forecasts.
+
+### Kết quả California, cấu hình nhỏ
+
+112 origins, 448 dự báo; 30 synthetic curves, k=5, h=4, closest=50,
+spline, 5.000 draws, seed=13. Kết quả local ở
+`outputs/backtest_california_wis/`.
+
+| Chỉ số | sMOA | Persistence + NB |
+| --- | ---: | ---: |
+| MAE | 51.017,20 | 55.089,95 |
+| WIS | 31.854,45 | 35.442,88 |
+| Coverage 50% | 52,46% | 47,10% |
+| Coverage 80% | 75,22% | 74,11% |
+| Coverage 95% | 86,61% | 86,16% |
+
+WIS thấp hơn là tốt hơn, nhưng coverage 95% còn dưới mức danh nghĩa. Chưa có
+cơ sở kết luận đã tái hiện chất lượng của bài báo từ cấu hình và final truth này.
+Snapshot summary và cấu hình tại [results/california_probabilistic.json](results/california_probabilistic.json)
+được lưu trong Git; CSV chi tiết vẫn ở outputs local.
+
+10 tests kiểm tra embedding, matching, WIS bằng công thức interval score độc lập,
+MLE trên dữ liệu NB có size đã biết, lịch khởi tạo, tái lập RNG và chống sử dụng
+outcome tương lai. Kiểm tra end-to-end thay đổi truth sau origin mà quantile
+đã phát hành vẫn giống hệt; toàn bộ point forecasts giữ nguyên so với bước 2.

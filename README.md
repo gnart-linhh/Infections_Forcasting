@@ -43,3 +43,16 @@ và backtest với baseline giữ nguyên giá trị tuần cuối:
 
 Xem [hướng dẫn backtest](experiments/forecasting/README.md) để chuẩn bị truth CSV,
 đọc kết quả và hiểu các khác biệt còn lại so với thí nghiệm gốc.
+
+
+## Bước 3: khoảng dự báo và WIS
+
+```bash
+.venv/bin/python experiments/forecasting/run_backtest.py \
+  --truth outputs/truth/California.csv --probabilistic \
+  --max-origins 0 --seed 13 --output-dir outputs/backtest_california_wis
+```
+
+Học NB dispersion theo horizon từ các forecast đã có outcome, xuất quantile,
+WIS và coverage. Chi tiết phương pháp, kết quả California và giới hạn tái hiện
+ở [hướng dẫn bước 3](experiments/forecasting/README.md#bước-3--khoảng-dự-báo-online-dispersion-và-wis).
