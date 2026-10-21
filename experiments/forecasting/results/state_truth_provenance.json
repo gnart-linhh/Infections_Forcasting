@@ -1,0 +1,357 @@
+{
+  "history_mode": "final",
+  "source": "https://github.com/lanl/precog/tree/main/smoa/data/state_truths",
+  "pyreadr": "0.5.7",
+  "files": [
+    {
+      "series": "Alabama",
+      "source_name": "Alabama.RData",
+      "source_sha256": "6a4d3164dc8276f26e4c303fdab8e435edd775c22e7135ea05145f14bb37539b",
+      "csv_sha256": "5cc174b8717ebe9d7c6bb8a92a9c9657f33cca8fe27ac3e8019c9b272c9f52fe",
+      "rows": 145
+    },
+    {
+      "series": "Alaska",
+      "source_name": "Alaska.RData",
+      "source_sha256": "e4c2034477a4868abb643a603078117bf5c0b547e500e70df573aa52feb94a3e",
+      "csv_sha256": "ad46eb0c3f61073ab46eb37d83bab3580aa28192b4f8a55e522c5d1f8eabb321",
+      "rows": 145
+    },
+    {
+      "series": "Arizona",
+      "source_name": "Arizona.RData",
+      "source_sha256": "571800fcf9578e6e671665072dee457248a4c2d95dd39501cb6dfd04af573f86",
+      "csv_sha256": "3fb690efebc673e8e80a66c30d8d5dcca9111f8854a5bd0013057d9292bdf756",
+      "rows": 162
+    },
+    {
+      "series": "Arkansas",
+      "source_name": "Arkansas.RData",
+      "source_sha256": "6371030fa4ad5854f88e96a60a36c1403b6d68f7549ca570dbe6017780ac0af3",
+      "csv_sha256": "5bbbc46452621358dd96826f0fa4ab97f567b0d952750138eaf864a884ea5485",
+      "rows": 145
+    },
+    {
+      "series": "California",
+      "source_name": "California.RData",
+      "source_sha256": "b761254aa7e0009d114fab1249113b44c21523ea4105c6e225a63e219b7052b1",
+      "csv_sha256": "2fd4cb6aeadc93e6c5f1ad4550c04146da235eee766bbbf0295c121d84f2814c",
+      "rows": 145
+    },
+    {
+      "series": "Colorado",
+      "source_name": "Colorado.RData",
+      "source_sha256": "8e76632aa240943cda0e51b7718301d568447837633fadd5a763d43535566ee1",
+      "csv_sha256": "857135a04a2830dc57f8620fceaed8034aa16ec7df4c818ae0fe8c0101d1fe88",
+      "rows": 145
+    },
+    {
+      "series": "Connecticut",
+      "source_name": "Connecticut.RData",
+      "source_sha256": "616aa4d34b91969d066026fb7bf88b0a352bd849c257e4986c24c21b021a765d",
+      "csv_sha256": "32704b6c76cf39a6240fc17e560e8503bc8fb564bce2dec4361ed9bdc00873e7",
+      "rows": 145
+    },
+    {
+      "series": "Delaware",
+      "source_name": "Delaware.RData",
+      "source_sha256": "399da8bd57117f1ff67f7ef3183dbf07c961249a3dab620bbc59045489e0bd53",
+      "csv_sha256": "42849bdb552cd28f32ab48301e4edfe0fa78f0c7cc4e66ed7a12079adaff098b",
+      "rows": 145
+    },
+    {
+      "series": "Florida",
+      "source_name": "Florida.RData",
+      "source_sha256": "7ae42450c4a33c8f98d76cdfe248af171a951b50bd0039b553043793e8d5f957",
+      "csv_sha256": "a43f225edf7fa3ae91d61ab658ddb55660f1d4116b5c53d7c750489f60d64ee3",
+      "rows": 145
+    },
+    {
+      "series": "Georgia",
+      "source_name": "Georgia.RData",
+      "source_sha256": "18a1e10f6bc78f6d2b2e99145d1355540645b0ff84fc262a264cb3df173a8149",
+      "csv_sha256": "15727f555ecf7e2a5ee7116d4032212433518b68dfe845669e52418e59574471",
+      "rows": 145
+    },
+    {
+      "series": "Hawaii",
+      "source_name": "Hawaii.RData",
+      "source_sha256": "f9a9dd04f9d1c916641589afdc0231251ca6c350e18d7499e8102cecb22abd4e",
+      "csv_sha256": "8e3d1dcc02e3fbd6f24d315ac1ffeec1cd89a4abaf06f7752a805d9728b13201",
+      "rows": 145
+    },
+    {
+      "series": "Idaho",
+      "source_name": "Idaho.RData",
+      "source_sha256": "7d533399917068f4afa79bb74837825ecfa28575d8f8cf93c4f5b66317fc3cca",
+      "csv_sha256": "efd15b0955170e54b35f00705511fe1f6c36ce2a4e91e538cbe8407caa25ce0a",
+      "rows": 145
+    },
+    {
+      "series": "Illinois",
+      "source_name": "Illinois.RData",
+      "source_sha256": "81836de461bc822d41679be846b018c84fbe1c424c2b5fb1d7add1b516dc0310",
+      "csv_sha256": "086f0072cdb1108990420fafffdec910730361818012b659e13d22525bf194e0",
+      "rows": 145
+    },
+    {
+      "series": "Indiana",
+      "source_name": "Indiana.RData",
+      "source_sha256": "482d4beac790642bc49c13c2857732f0cd4cc3736d0b218b94f44121b50c0594",
+      "csv_sha256": "2c84837f996ce061401edec226ff0ea04dfdf19c8586c7d243664b0660e89cb6",
+      "rows": 145
+    },
+    {
+      "series": "Iowa",
+      "source_name": "Iowa.RData",
+      "source_sha256": "b5aabaff2375102f0ba2b0993512873f8f07518e86fcc1913bd1a3fe53104873",
+      "csv_sha256": "29a48ee55d391e87e193ecb0d2a7506376ad772faf5a64a4845ed84c88c0593f",
+      "rows": 145
+    },
+    {
+      "series": "Kansas",
+      "source_name": "Kansas.RData",
+      "source_sha256": "1e7359ea11ed4ac8f80a5cd9659e8a6f2ff00feb35fd0a1b145199295bac2df2",
+      "csv_sha256": "e81e81e304f9cc32e6c5107a3242ffe6d66568859079339cc8dfab8c8f15212d",
+      "rows": 145
+    },
+    {
+      "series": "Kentucky",
+      "source_name": "Kentucky.RData",
+      "source_sha256": "44b2834916d56952af92804fb37ff89d6779107df9cfd474df3a75c9fc5ab79f",
+      "csv_sha256": "ab9e76259576ce052a5a4e5f6098aadde374524394f47b36f0014bf4e3b57196",
+      "rows": 145
+    },
+    {
+      "series": "Louisiana",
+      "source_name": "Louisiana.RData",
+      "source_sha256": "66a4cdbab99b7334416473f8c38626668085f3b711ccbf9285391a6bbacf14b2",
+      "csv_sha256": "40b4e5bc2e146fd7b100e5295f9cfe9a69a748645d0ad3fba8a6cab3705eff71",
+      "rows": 145
+    },
+    {
+      "series": "Maine",
+      "source_name": "Maine.RData",
+      "source_sha256": "7a89b1f6b3fcc0d217a55adea8b91d41776c4c2c1016ec151e451bf987517609",
+      "csv_sha256": "0983914334fcc9cb9e865a931efedbc725e0f495fc4f334587604ecc63ba1079",
+      "rows": 145
+    },
+    {
+      "series": "Maryland",
+      "source_name": "Maryland.RData",
+      "source_sha256": "cd9678d4e1d72776cda84210ce2f129c6e077cb04779f7144d83cded3bebbfe8",
+      "csv_sha256": "31835f97a93354bb637792aa2e928031204296628e522c60a68e02d41ee46a6d",
+      "rows": 145
+    },
+    {
+      "series": "Massachusetts",
+      "source_name": "Massachusetts.RData",
+      "source_sha256": "e1155be2f983457bada6179d6d31b2ddd0463ecc4c86bfb518582b2beffe05b6",
+      "csv_sha256": "b36716ec0b182d73197e886a2966d6e0f39e0af09b7ba04fbdf2bbb73e8b1a55",
+      "rows": 145
+    },
+    {
+      "series": "Michigan",
+      "source_name": "Michigan.RData",
+      "source_sha256": "73f3cc6582f2f5c3864a00bc0defbefa366d869de6ac0bf618e29f8413547cc9",
+      "csv_sha256": "f2368ff9b359b0e5b3820c740abcd02ffdd597f9d4a6daf21ebda66a9a60e225",
+      "rows": 145
+    },
+    {
+      "series": "Minnesota",
+      "source_name": "Minnesota.RData",
+      "source_sha256": "3de58d80ebc19c89978c4d33a07ac31ca7c92454a72994096115b8da5a78a412",
+      "csv_sha256": "60fdae295218f2b785a68fe5f133f00452a8e70245df9a8097804596994d8611",
+      "rows": 145
+    },
+    {
+      "series": "Mississippi",
+      "source_name": "Mississippi.RData",
+      "source_sha256": "828d64a62b0419695325e1f1c46be171f7c6fd7669612b9354ad36fbf85da194",
+      "csv_sha256": "b845cb0745d380f5b9b0aa95a0cddeec5f151f15d12407c3298731abb475863b",
+      "rows": 145
+    },
+    {
+      "series": "Missouri",
+      "source_name": "Missouri.RData",
+      "source_sha256": "c921b7de6b1ef2a65e75d6d0944d87b22480936095a2d472db82c43d5db437c7",
+      "csv_sha256": "7026f5333858d18716f1ce72ab706f1f16b61d8c4543887f5678b2b9f60df3c6",
+      "rows": 145
+    },
+    {
+      "series": "Montana",
+      "source_name": "Montana.RData",
+      "source_sha256": "2200170dd835f050be7630e6075fe213c327aec5d5d23a9c4faee8ba8706f26b",
+      "csv_sha256": "c93e043fc2e75585eafa9b710bbfc42e346118f5651df6d21a7a0910721b5afd",
+      "rows": 145
+    },
+    {
+      "series": "Nebraska",
+      "source_name": "Nebraska.RData",
+      "source_sha256": "779fedc80482559e03540c02ad64dbd9127f9ef78dab7b000a1e91b074184792",
+      "csv_sha256": "4b79696cfd8cbc7a8d1a36018b495f427e14d70dc7d50cbf0f244f312c410a7f",
+      "rows": 145
+    },
+    {
+      "series": "Nevada",
+      "source_name": "Nevada.RData",
+      "source_sha256": "7854d6ca1ed41ad4e6ad5c1855176d774b9d083c996af74f9a19e9108d965d40",
+      "csv_sha256": "fcf562e1c40a2af86879dce60c462eefba616a79aee60fc324f5f407b887d6fe",
+      "rows": 145
+    },
+    {
+      "series": "New Hampshire",
+      "source_name": "NewHampshire.RData",
+      "source_sha256": "8326d696819bd2772158238a9874f859b69388cc9d566913c06133966e3d4eb8",
+      "csv_sha256": "c75731983e5b11159ff38fc6f0ec229fbaa4a416f98104273297f706740f95a3",
+      "rows": 145
+    },
+    {
+      "series": "New Jersey",
+      "source_name": "NewJersey.RData",
+      "source_sha256": "251286eaaba4d73082028aa66ec307bab2a65c956b2fbcab72fc6a63fc5e6573",
+      "csv_sha256": "3010bb95ccfbb596914a654bf22766167a8afd4c9444370611b0d57359003933",
+      "rows": 145
+    },
+    {
+      "series": "New Mexico",
+      "source_name": "NewMexico.RData",
+      "source_sha256": "554c1a1d3a63f91359fa033f93709dcfce379790f862afe1c6e90df4c3cf788e",
+      "csv_sha256": "ff074823b3c3db25d34be666e97532f55c07ff167cc655f68f2536724284a300",
+      "rows": 145
+    },
+    {
+      "series": "New York",
+      "source_name": "NewYork.RData",
+      "source_sha256": "0f084023cea7453ebda4784ac7944bbe82a35e2dd87fc39f7c71429658d30a88",
+      "csv_sha256": "7121fa1a671984e6094410bbee84ba8304a1006ef512a33538e2548d965d5d74",
+      "rows": 145
+    },
+    {
+      "series": "North Carolina",
+      "source_name": "NorthCarolina.RData",
+      "source_sha256": "1823537f9135cd8d1abe77d703dca995488f28d73c796b372cd6b556586bdee8",
+      "csv_sha256": "07e5bae901099520f375e6197b25f637db704e213940031cd4d16a2fb5dc4cca",
+      "rows": 145
+    },
+    {
+      "series": "North Dakota",
+      "source_name": "NorthDakota.RData",
+      "source_sha256": "8554cf0c50b59df62fa5689b1e41ebfb5e3cd56dc07ff69a9265a5ad375da3e4",
+      "csv_sha256": "113e6699272feee8282a74f7d9d445c472c15294a7c13297ee2505ed98f39039",
+      "rows": 145
+    },
+    {
+      "series": "Ohio",
+      "source_name": "Ohio.RData",
+      "source_sha256": "06e7e8650eaec856f7dc07b3d52c64d1fa08234908152b3533580fa5962b369d",
+      "csv_sha256": "f5fd4604793b7e8da704bd3708e623df153fbcc40cb6087190f0f21724358c51",
+      "rows": 145
+    },
+    {
+      "series": "Oklahoma",
+      "source_name": "Oklahoma.RData",
+      "source_sha256": "ed62deb95dc5c47cfbbc5e62e98575c6c61b410a189e15f65fdef42a5e3542a4",
+      "csv_sha256": "ae42004dafae913fe1b97832d199948caa5580f54593426cb40259817a918c7b",
+      "rows": 145
+    },
+    {
+      "series": "Oregon",
+      "source_name": "Oregon.RData",
+      "source_sha256": "845c3ef1987373f545b7716c4ff989a6d186de5ab806ac430cae3add7bd9ef06",
+      "csv_sha256": "88eef573f96d47e5dde7959e181b28b3f989ca6f77d80f5a9c6e9cc13e31e42c",
+      "rows": 145
+    },
+    {
+      "series": "Pennsylvania",
+      "source_name": "Pennsylvania.RData",
+      "source_sha256": "2dcd59f5fd8726527fef0b3e350f2445bd7b9d9debeb363b37ee32ec5751929f",
+      "csv_sha256": "4f8ca2f95406ce563fea5bca33aa223eeaaa29f46d89e59af0dd3434dd5943cd",
+      "rows": 145
+    },
+    {
+      "series": "Rhode Island",
+      "source_name": "RhodeIsland.RData",
+      "source_sha256": "0fd16447c6d3f3c2400530a993710d53c565472ffbadd75b317e2f48fad5984c",
+      "csv_sha256": "431ae858c935e36a28359860b7a4084dd28922e78836ca7d4b95e8153cb0d298",
+      "rows": 145
+    },
+    {
+      "series": "South Carolina",
+      "source_name": "SouthCarolina.RData",
+      "source_sha256": "be13781ff6ca39654f54891c2cc78be43ca9144da8512b4b4a0c211683cbea8a",
+      "csv_sha256": "395f024b5c12a28edb2d66f6d23a0a9478b15c23f02096b5e77a2bf0c7593b73",
+      "rows": 145
+    },
+    {
+      "series": "South Dakota",
+      "source_name": "SouthDakota.RData",
+      "source_sha256": "3224c3a3ad5cdd8230effacddfe93c17ad6f6f45d3399d400687869616d343ac",
+      "csv_sha256": "c1af8b8614ef18ec45ef2d016595ae582f40e048605d84edc33e12dc9031c36f",
+      "rows": 145
+    },
+    {
+      "series": "Tennessee",
+      "source_name": "Tennessee.RData",
+      "source_sha256": "9b718ce85e040867ed25f72b0b824eaf19c04e093fc041ae3373c1c871f16dab",
+      "csv_sha256": "2331f28b4b929e8e6efc1eb4781f8a33fa820c38d1d9d446a9ed020589d1930c",
+      "rows": 145
+    },
+    {
+      "series": "Texas",
+      "source_name": "Texas.RData",
+      "source_sha256": "c9f59a0787b2229d2969f571ade4280c96ce1250b13fa972dec24f5ffa5ee2b1",
+      "csv_sha256": "70b91f6d417d7408bec140e0278839efb359333ed944f340bfecd6661308285b",
+      "rows": 145
+    },
+    {
+      "series": "Utah",
+      "source_name": "Utah.RData",
+      "source_sha256": "a6b88332f81e5f9960fc59fa95f85959c2cad843623492360cbae9a8314d909b",
+      "csv_sha256": "e79daf7da095229f3d0c191288905201b809f51bfce6566e8dd649b83fe379e4",
+      "rows": 145
+    },
+    {
+      "series": "Vermont",
+      "source_name": "Vermont.RData",
+      "source_sha256": "664c38668e2933d034efaf255b533e8083818e938ae9a479f51074951b324937",
+      "csv_sha256": "ad2804beb0dba380cedcf7885ac986d05e0cd9cd73e2d86d62e2e6e2416a9bf9",
+      "rows": 145
+    },
+    {
+      "series": "Virginia",
+      "source_name": "Virginia.RData",
+      "source_sha256": "a0938de6bf68c306525fdd8333dd3a844c6029f641cc6798031b9d1b2a333cc2",
+      "csv_sha256": "da8351471841574056fee503e10f52e3ec1ab3c44088c636bd45419454f4eb59",
+      "rows": 145
+    },
+    {
+      "series": "Washington",
+      "source_name": "Washington.RData",
+      "source_sha256": "77af12c7ec9fcada10c9ebec6fd9da68b429e40b79936708ae704a8777e60251",
+      "csv_sha256": "cb29f391ca81c9562177c406c52c35110cb02c2b633d12609ef6afc9461b6396",
+      "rows": 145
+    },
+    {
+      "series": "West Virginia",
+      "source_name": "WestVirginia.RData",
+      "source_sha256": "2700abf804a66e9315b30495b3e79d5e637d33620127a8904a2dd1d4a33559d0",
+      "csv_sha256": "a3d2d6cf0333a943958e4b3656c80d8a5858391cf2729d9b307b1943c8855cd0",
+      "rows": 145
+    },
+    {
+      "series": "Wisconsin",
+      "source_name": "Wisconsin.RData",
+      "source_sha256": "6f41253a38e4277833685e0427596d19b964adfac5ae87576d064c505389524c",
+      "csv_sha256": "8bc2aa36194ad5a992736fd2da46550ca15a3fc9ba0a009ffc3d74b9ab7a61fa",
+      "rows": 145
+    },
+    {
+      "series": "Wyoming",
+      "source_name": "Wyoming.RData",
+      "source_sha256": "19396537689a7006f038c80822a10e760cf76ff08666a6aeb7df8e587828359b",
+      "csv_sha256": "0546ccdb3b13b70dd85c7b13a0e17ddb7b008c8d5c5c0d13533a8a66c12bd359",
+      "rows": 145
+    }
+  ]
+}

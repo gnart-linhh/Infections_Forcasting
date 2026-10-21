@@ -175,3 +175,9 @@ Snapshot summary và cấu hình tại [results/california_probabilistic.json](r
 MLE trên dữ liệu NB có size đã biết, lịch khởi tạo, tái lập RNG và chống sử dụng
 outcome tương lai. Kiểm tra end-to-end thay đổi truth sau origin mà quantile
 đã phát hành vẫn giống hệt; toàn bộ point forecasts giữ nguyên so với bước 2.
+
+## Bước 4 — mở rộng nhiều bang
+
+Đã có runner benchmark, calibration warmup, giới hạn ngày origin và reader cho
+historical snapshots. Xem [BENCHMARK.md](BENCHMARK.md) để chạy 50 bang và hiểu
+mức độ tái hiện của dữ liệu final-truth/as-of. Các lệnh bước 2–3 vẫn dùng được.

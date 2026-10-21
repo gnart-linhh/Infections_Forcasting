@@ -56,3 +56,23 @@ Xem [hướng dẫn backtest](experiments/forecasting/README.md) để chuẩn b
 Học NB dispersion theo horizon từ các forecast đã có outcome, xuất quantile,
 WIS và coverage. Chi tiết phương pháp, kết quả California và giới hạn tái hiện
 ở [hướng dẫn bước 3](experiments/forecasting/README.md#bước-3--khoảng-dự-báo-online-dispersion-và-wis).
+
+## Bước 4: benchmark 50 bang và historical snapshots
+
+```bash
+.venv/bin/python experiments/forecasting/run_benchmark.py \
+  --manifest outputs/truth_states/manifest.csv --probabilistic \
+  --warmup-start-date 2020-06-06 --end-date 2022-10-01 \
+  --max-origins 0 --negative-truth clip \
+  --output-dir outputs/benchmark_50_states_new
+```
+
+Xem [hướng dẫn benchmark](experiments/forecasting/BENCHMARK.md): manifest CSV,
+chỉ số tổng hợp/theo bang, calibration warmup và chế độ đọc snapshot as-of.
+Lượt benchmark hiện tại dùng final truth; chưa có archive as-of thật trong workspace.
+
+## Dataset exploration
+
+Mở [notebook exploration](experiments/exploration/dataset_exploration.ipynb) để
+xem thống kê, kiểm tra chất lượng dữ liệu và biểu đồ cho synthetic + truth 50 bang.
+Cách cài dependency, chạy lại và các file báo cáo: [hướng dẫn EDA](experiments/exploration/README.md).

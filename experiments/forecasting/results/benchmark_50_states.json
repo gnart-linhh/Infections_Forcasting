@@ -1,0 +1,343 @@
+{
+  "summary": {
+    "history_mode": "final",
+    "series": 50,
+    "scored_origins": 5600,
+    "pooled": {
+      "mae": 8123.369130478371,
+      "baseline_mae": 8393.776026785714,
+      "wis": 5057.373134119182,
+      "coverage_50": 0.48946428571428574,
+      "coverage_80": 0.7220089285714286,
+      "coverage_95": 0.8364285714285714,
+      "width_95": 38592.228888392834,
+      "sharpness": 1849.395307557398,
+      "overprediction": 1340.0586365665574,
+      "underprediction": 1867.919189995228,
+      "baseline_wis": 5216.34915440051,
+      "baseline_coverage_50": 0.4790625,
+      "baseline_coverage_80": 0.7324107142857142,
+      "baseline_coverage_95": 0.863125,
+      "baseline_width_95": 36027.2370223214,
+      "baseline_sharpness": 1735.8919735969394,
+      "baseline_overprediction": 1297.4940663265306,
+      "baseline_underprediction": 2182.9631144770406
+    },
+    "relative": {
+      "mae": {
+        "mean_series_ratio": 1.0257900724009898,
+        "median_series_ratio": 1.02913944170838,
+        "series_better_than_baseline": 20,
+        "eligible_series": 50,
+        "excluded_zero_baseline": 0
+      },
+      "wis": {
+        "mean_series_ratio": 1.0354654356309745,
+        "median_series_ratio": 1.0386700642100253,
+        "series_better_than_baseline": 19,
+        "eligible_series": 50,
+        "excluded_zero_baseline": 0
+      }
+    },
+    "scored_start": "2020-08-15",
+    "scored_end": "2022-10-01",
+    "common_scored_range": true,
+    "scored_forecasts": 22400,
+    "warmup_origins": 500,
+    "by_horizon": {
+      "1": {
+        "series": 50,
+        "scored_origins": 5600,
+        "pooled": {
+          "mae": 4178.833213844701,
+          "baseline_mae": 4487.03625,
+          "wis": 2536.23870169438,
+          "coverage_50": 0.5444642857142857,
+          "coverage_80": 0.7819642857142857,
+          "coverage_95": 0.8833928571428571,
+          "width_95": 20271.294098214275,
+          "sharpness": 1009.4484505739798,
+          "overprediction": 635.7784947583424,
+          "underprediction": 891.0117563620579,
+          "baseline_wis": 2657.1503057079085,
+          "baseline_coverage_50": 0.5126785714285714,
+          "baseline_coverage_80": 0.7766071428571428,
+          "baseline_coverage_95": 0.90625,
+          "baseline_width_95": 19613.507834821423,
+          "baseline_sharpness": 977.1104638711736,
+          "baseline_overprediction": 669.7109604591836,
+          "baseline_underprediction": 1010.3288813775512
+        },
+        "relative": {
+          "mae": {
+            "mean_series_ratio": 0.9558508182856871,
+            "median_series_ratio": 0.9564929363685468,
+            "series_better_than_baseline": 37,
+            "eligible_series": 50,
+            "excluded_zero_baseline": 0
+          },
+          "wis": {
+            "mean_series_ratio": 0.9855202773797715,
+            "median_series_ratio": 0.9833022516427019,
+            "series_better_than_baseline": 33,
+            "eligible_series": 50,
+            "excluded_zero_baseline": 0
+          }
+        }
+      },
+      "2": {
+        "series": 50,
+        "scored_origins": 5600,
+        "pooled": {
+          "mae": 6691.444463876358,
+          "baseline_mae": 7117.833214285714,
+          "wis": 4062.9361413052293,
+          "coverage_50": 0.5139285714285714,
+          "coverage_80": 0.7566071428571428,
+          "coverage_95": 0.8596428571428572,
+          "width_95": 32778.83654910712,
+          "sharpness": 1611.0913781568877,
+          "overprediction": 1003.0898006400777,
+          "underprediction": 1448.7549625082645,
+          "baseline_wis": 4277.558516645409,
+          "baseline_coverage_50": 0.49714285714285716,
+          "baseline_coverage_80": 0.7608928571428571,
+          "baseline_coverage_95": 0.8901785714285714,
+          "baseline_width_95": 31236.32481249998,
+          "baseline_sharpness": 1537.3172628188772,
+          "baseline_overprediction": 1000.2137857142858,
+          "baseline_underprediction": 1740.027468112245
+        },
+        "relative": {
+          "mae": {
+            "mean_series_ratio": 0.9822522709288057,
+            "median_series_ratio": 0.9799042238675015,
+            "series_better_than_baseline": 30,
+            "eligible_series": 50,
+            "excluded_zero_baseline": 0
+          },
+          "wis": {
+            "mean_series_ratio": 1.0013133856799883,
+            "median_series_ratio": 0.9941678734052696,
+            "series_better_than_baseline": 26,
+            "eligible_series": 50,
+            "excluded_zero_baseline": 0
+          }
+        }
+      },
+      "3": {
+        "series": 50,
+        "scored_origins": 5600,
+        "pooled": {
+          "mae": 9772.992501358854,
+          "baseline_mae": 10022.244464285714,
+          "wis": 6072.761239491627,
+          "coverage_50": 0.47,
+          "coverage_80": 0.7019642857142857,
+          "coverage_95": 0.825,
+          "width_95": 46476.21003571426,
+          "sharpness": 2211.3752779336737,
+          "overprediction": 1610.482655373336,
+          "underprediction": 2250.903306184617,
+          "baseline_wis": 6249.66265328444,
+          "baseline_coverage_50": 0.46839285714285717,
+          "baseline_coverage_80": 0.7194642857142857,
+          "baseline_coverage_95": 0.8485714285714285,
+          "baseline_width_95": 42506.77165624998,
+          "baseline_sharpness": 2046.0433139987244,
+          "baseline_overprediction": 1533.1316747448975,
+          "baseline_underprediction": 2670.4876645408167
+        },
+        "relative": {
+          "mae": {
+            "mean_series_ratio": 1.037034059771907,
+            "median_series_ratio": 1.032843098055186,
+            "series_better_than_baseline": 20,
+            "eligible_series": 50,
+            "excluded_zero_baseline": 0
+          },
+          "wis": {
+            "mean_series_ratio": 1.0421189501129313,
+            "median_series_ratio": 1.033476889761491,
+            "series_better_than_baseline": 18,
+            "eligible_series": 50,
+            "excluded_zero_baseline": 0
+          }
+        }
+      },
+      "4": {
+        "series": 50,
+        "scored_origins": 5600,
+        "pooled": {
+          "mae": 11850.20634283357,
+          "baseline_mae": 11947.990178571428,
+          "wis": 7557.556453985495,
+          "coverage_50": 0.4294642857142857,
+          "coverage_80": 0.6475,
+          "coverage_95": 0.7776785714285714,
+          "width_95": 54842.57487053569,
+          "sharpness": 2565.6661235650517,
+          "overprediction": 2110.883595494474,
+          "underprediction": 2881.0067349259707,
+          "baseline_wis": 7681.025141964286,
+          "baseline_coverage_50": 0.4380357142857143,
+          "baseline_coverage_80": 0.6726785714285715,
+          "baseline_coverage_95": 0.8075,
+          "baseline_width_95": 50752.34378571425,
+          "baseline_sharpness": 2383.09685369898,
+          "baseline_overprediction": 1986.9198443877551,
+          "baseline_underprediction": 3311.008443877551
+        },
+        "relative": {
+          "mae": {
+            "mean_series_ratio": 1.0694356343506872,
+            "median_series_ratio": 1.058640803305524,
+            "series_better_than_baseline": 14,
+            "eligible_series": 50,
+            "excluded_zero_baseline": 0
+          },
+          "wis": {
+            "mean_series_ratio": 1.0675656457108387,
+            "median_series_ratio": 1.0764619102247814,
+            "series_better_than_baseline": 13,
+            "eligible_series": 50,
+            "excluded_zero_baseline": 0
+          }
+        }
+      }
+    }
+  },
+  "metadata": {
+    "config": {
+      "synthetic": "outputs/synthetic_demo/curves.csv",
+      "truth": null,
+      "as_of_truth": null,
+      "warmup_start_date": "2020-06-06",
+      "series": "California",
+      "k": 5,
+      "h": 4,
+      "closest": 50,
+      "negative_truth": "clip",
+      "end_date": "2022-10-01",
+      "start_date": "2020-08-15",
+      "max_origins": 0,
+      "smoothing": "spline",
+      "probabilistic": true,
+      "interval_draws": 5000,
+      "seed": 13,
+      "output_dir": "outputs/benchmark_50_states_aligned",
+      "manifest": "outputs/truth_states/manifest.csv",
+      "history_mode": "final"
+    },
+    "manifest_sha256": "22685117f4d15f5221972ff8272cf112407a65b3105b29d8fae10451b44bdd65",
+    "source_sha256": {
+      "run_benchmark.py": "fc7e3115c7b47ceee4fdcf673cbe1b92ca777019cc8ad9debeae1b8ea89ec957",
+      "run_backtest.py": "7d583840f29403df5ce54ece95ded24a23b65c0bb9698c86efdc7eecdaf998ea",
+      "model.py": "bac955405b50bc0047bef1bceb75dc323605da584b052a392a1814ecb58cb762",
+      "snapshots.py": "9962a59691b1bdef8da2e77928fdeb72a69f26cd166804d1d287687f9bd23921",
+      "uncertainty.py": "2e02986d66031ee4fc3ba025185e48dee7c3bea0c61f0881c83e01239cd045dd"
+    },
+    "status": "complete",
+    "notes": [
+      "Per-series outputs include input checksums and environment versions",
+      "Same synthetic library and hyperparameters across series; no tuning on scores",
+      "Relative ratios use persistence+NB, not COVIDHub ensemble"
+    ]
+  },
+  "synthetic_generation": {
+    "engine": "python-approximate",
+    "num_curves_per_family": 10,
+    "seed_offset": 0,
+    "accepted": {
+      "sir_rollercoaster": 10,
+      "sir_rollercoaster_wiggle": 10,
+      "seasonal": 10
+    },
+    "failed": [],
+    "python": "3.13.5",
+    "numpy": "2.5.4",
+    "scipy": "1.18.1",
+    "helper_sha256": "048a634cdacc8cc83405d573a64e17c4569fe6826e7a5f5923d855911bbff2a5",
+    "source": "https://github.com/lanl/precog/tree/main/smoa"
+  },
+  "data_quality": {
+    "policy": "Raw exported CSV retained; --negative-truth clip floors at 1 in runner",
+    "series_with_negatives": 7,
+    "negative_rows": 8,
+    "details": [
+      {
+        "file": "Delaware.csv",
+        "negative_values": [
+          {
+            "target_end_date": "2022-04-09",
+            "value": "-730.0"
+          }
+        ]
+      },
+      {
+        "file": "Florida.csv",
+        "negative_values": [
+          {
+            "target_end_date": "2022-08-20",
+            "value": "-25117.0"
+          }
+        ]
+      },
+      {
+        "file": "Missouri.csv",
+        "negative_values": [
+          {
+            "target_end_date": "2021-04-17",
+            "value": "-4584.0"
+          }
+        ]
+      },
+      {
+        "file": "Nebraska.csv",
+        "negative_values": [
+          {
+            "target_end_date": "2022-03-26",
+            "value": "-15.0"
+          },
+          {
+            "target_end_date": "2022-10-29",
+            "value": "-6709.0"
+          }
+        ]
+      },
+      {
+        "file": "NorthDakota.csv",
+        "negative_values": [
+          {
+            "target_end_date": "2022-10-29",
+            "value": "-211.0"
+          }
+        ]
+      },
+      {
+        "file": "Washington.csv",
+        "negative_values": [
+          {
+            "target_end_date": "2022-02-19",
+            "value": "-1343.0"
+          }
+        ]
+      },
+      {
+        "file": "Wyoming.csv",
+        "negative_values": [
+          {
+            "target_end_date": "2022-04-16",
+            "value": "-23.0"
+          }
+        ]
+      }
+    ]
+  },
+  "limitations": [
+    "Final truth, not a real-time/as-of evaluation",
+    "30 synthetic curves, closest=50, Python approximate generator and SciPy spline",
+    "Warmup recomputed from June 6; not the upstream frozen-snapshot prehistory",
+    "Persistence+NB is the comparator; COVIDHub models not evaluated"
+  ]
+}

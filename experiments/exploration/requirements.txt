@@ -1,0 +1,6 @@
+-r ../synthetic/requirements.txt
+pandas
+matplotlib
+nbformat
+nbclient
+ipykernel
