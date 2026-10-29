@@ -1,9 +1,17 @@
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "experiments/forecasting"))
+sys.path.insert(0, str(ROOT / "experiments/data"))
+
 import tempfile
 import unittest
 from pathlib import Path
 import numpy as np
 from model import load_library, forecast
 from run_backtest import load_truth
+from neighbors import ExactNeighbors
 
 
 class ModelTests(unittest.TestCase):
@@ -31,6 +39,19 @@ class ModelTests(unittest.TestCase):
             path.write_text('target_end_date,value\n2020-01-01,1\n2020-01-15,2\n')
             with self.assertRaises(ValueError):
                 load_truth(path)
+
+    def test_tree_neighbors_equal_stable_brute_force_including_boundary_ties(self):
+        rng=np.random.default_rng(13)
+        x=rng.normal(size=(12000,5));x[:100]=0
+        queries=np.vstack([np.zeros(5),rng.normal(size=(4,5))])
+        index=ExactNeighbors(x,workers=1)
+        self.assertIsNotNone(index.tree)
+        ids,distances=index.query(queries,12)
+        for query,actual,actual_distances in zip(queries,ids,distances):
+            brute=np.abs(x-query).sum(axis=1)
+            expected=np.argsort(brute,kind='stable')[:12]
+            np.testing.assert_array_equal(actual,expected)
+            np.testing.assert_array_equal(actual_distances,brute[expected])
 
 
 if __name__ == '__main__':

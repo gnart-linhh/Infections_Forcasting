@@ -2,7 +2,7 @@
 
 Khám phá hai bộ dữ liệu trước khi train/backtest:
 
-- Synthetic: `outputs/synthetic_demo/curves.csv`.
+- Synthetic: `outputs/reproduction_full/01_synthetic/curves.csv`.
 - Final truth của 50 bang: các CSV được liệt kê trong `outputs/truth_states/manifest.csv`.
 
 ## Notebook
@@ -13,7 +13,7 @@ cells để có thể xem ngay trong IDE. Có thể sửa `SYNTHETIC`, `MANIFEST
 ở cell cấu hình để dùng bộ dữ liệu khác.
 
 ```bash
-.venv/bin/python -m pip install -r experiments/exploration/requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python experiments/exploration/execute_notebook.py
 ```
 
@@ -24,7 +24,7 @@ environment đang chạy; không cần checkout `precog/` hoặc R.
 
 ```bash
 .venv/bin/python experiments/exploration/explore_datasets.py \
-  --synthetic outputs/synthetic_demo/curves.csv \
+  --synthetic outputs/reproduction_full/01_synthetic/curves.csv \
   --manifest outputs/truth_states/manifest.csv \
   --output-dir outputs/dataset_exploration
 ```
@@ -66,17 +66,10 @@ peak riêng từng bang trên khoảng chung đó. Không nội suy tuần thi�
 EDA mô tả final truth; không thay thế archive as-of hoặc chứng minh kết quả bài
 báo. Kết quả EDA không được dùng để chọn hyperparameter trên tập test.
 
-## Kết quả trên bộ hiện tại
+## Quy mô dữ liệu
 
-- 30 synthetic curves, 8.641 quan sát: 24 weekly / 6 monthly,
-  14 counts / 16 proportion; 1.930 giá trị ở floor `1e-10`.
-- Với k=5, h=4: 8.371 embedding windows, khớp runner forecasting.
-- 50 bang, 7.267 dòng truth. Khoảng lịch chung: 2020-01-25–2022-10-29;
-  Arizona có lịch dài hơn tới 2023-02-25.
-- 8 giá trị âm ở 7 bang, 324 số 0; 332 giá trị sẽ thay đổi khi floor ở 1.
-  Không phát hiện nonfinite, ngày trùng hoặc khoảng cách khác 7 ngày trong
-  từng chuỗi truth hiện có.
-
-Notebook đã chạy toàn bộ 11 code cells, lưu 5 hình trực tiếp trong notebook.
-Các số trên mô tả bộ synthetic nhỏ và truth local hiện tại, không đại diện cho
-mọi cấu hình sinh dữ liệu hoặc mọi snapshot lịch sử.
+Notebook mặc định đọc thư viện full ở `outputs/reproduction_full/01_synthetic`.
+Quy mô tham chiếu là 18.387 attempts/family × 3 = 55.161 attempts; lượt hiện
+có giữ 54.081 curves hợp lệ. Metadata phân biệt attempts với accepted curves.
+Notebook đọc CSV theo categorical columns để giảm RAM; timeout một giờ mỗi cell.
+Chạy notebook để lấy bảng thống kê và hình của chính bộ dữ liệu đang chọn.

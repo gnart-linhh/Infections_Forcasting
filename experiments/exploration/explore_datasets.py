@@ -21,7 +21,8 @@ COLORS = ['#2563a6', '#df8430', '#309077']
 
 
 def load_inputs(synthetic_path, manifest_path):
-    synthetic = pd.read_csv(synthetic_path, dtype={'curve_id': str})
+    synthetic = pd.read_csv(synthetic_path, usecols=lambda name:name!='seed',
+        dtype={name:'category' for name in ['curve_id','curve_type','time_cadence','scale']})
     required = {'curve_id','curve_type','time_cadence','scale','step','value'}
     if not required.issubset(synthetic.columns):
         raise ValueError(f'Missing synthetic columns: {required-set(synthetic.columns)}')
@@ -250,7 +251,7 @@ def run_exploration(synthetic_path, manifest_path, output_dir, k=5, h=4):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--synthetic',type=Path,default=ROOT/'outputs/synthetic_demo/curves.csv')
+    p.add_argument('--synthetic',type=Path,default=ROOT/'outputs/reproduction_full/01_synthetic/curves.csv')
     p.add_argument('--manifest',type=Path,default=ROOT/'outputs/truth_states/manifest.csv')
     p.add_argument('--output-dir',type=Path,default=ROOT/'outputs/dataset_exploration')
     p.add_argument('--k',type=int,default=5);p.add_argument('--h',type=int,default=4)

@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "experiments/forecasting"))
+sys.path.insert(0, str(ROOT / "experiments/data"))
+
 import unittest
 import numpy as np
 from uncertainty import dispersion, fit_size, interval_quantiles, scores
@@ -59,7 +66,7 @@ class BacktestIntegrationTests(unittest.TestCase):
         import subprocess
         import sys
         import tempfile
-        script = Path(__file__).with_name('run_backtest.py')
+        script = ROOT / 'experiments/forecasting/run_backtest.py'
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             synthetic = root/'synthetic.csv'

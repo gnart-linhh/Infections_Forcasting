@@ -19,7 +19,7 @@ def main():
     notebook=nbformat.read(path,as_version=4)
     manager=KernelManager(kernel_name='python3')
     manager.kernel_spec.argv=[sys.executable,'-m','ipykernel_launcher','-f','{connection_file}']
-    client=NotebookClient(notebook,km=manager,timeout=180,resources={'metadata':{'path':str(ROOT)}},
+    client=NotebookClient(notebook,km=manager,timeout=3600,resources={'metadata':{'path':str(ROOT)}},
                           extra_arguments=['--HistoryManager.hist_file=:memory:'])
     client.execute()
     nbformat.write(notebook,path)

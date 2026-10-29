@@ -5,6 +5,7 @@ from scipy.optimize import minimize_scalar
 from scipy.stats import nbinom
 
 QUANTILES = np.array([0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975])
+LONG_QUANTILES = np.r_[.01,.025,np.arange(1,20)/20,.975,.99]
 INITIAL_SIZES = (20.0, 10.0, 6.0, 0.3)
 
 
@@ -14,8 +15,8 @@ def fit_size(points, actuals):
     observed = np.asarray(actuals, dtype=float)
     if not len(means) or means.shape != observed.shape:
         raise ValueError('Need paired, nonempty calibration data')
-    if not np.all(np.isfinite(means)) or not np.all(np.isfinite(observed)) or np.any(means < 1) or np.any(observed < 1):
-        raise ValueError('Calibration values must be finite and at least 1')
+    if not np.all(np.isfinite(means)) or not np.all(np.isfinite(observed)) or np.any(means < 1) or np.any(observed < 0):
+        raise ValueError('Calibration means must be >=1 and outcomes >=0, all finite')
     means[means < 100] = observed[means < 100]
 
     def objective(inverse_size):
@@ -30,8 +31,12 @@ def fit_size(points, actuals):
     return 1.0 / inverse
 
 
-def dispersion(prior, origin, horizon, field='forecast', horizons=4):
-    eligible = [r for r in prior if r['horizon'] == horizon and r['target_end_date'] <= origin]
+def dispersion(prior, origin, horizon, field='forecast', horizons=4, policy='matured'):
+    if policy not in ['matured', 'figure2_retrospective']:
+        raise ValueError('Unknown calibration policy')
+    eligible = [r for r in prior if r['horizon'] == horizon and
+                (policy=='figure2_retrospective' or r['target_end_date'] <= origin) and
+                np.isfinite(r['true_value']) and r['true_value'] >= 0]
     if horizon < 1 or horizon > len(INITIAL_SIZES):
         raise ValueError('Probabilistic forecasts support horizons 1 to 4')
     # Upstream switches after six complete forecast origins. Only matured outcomes
@@ -41,14 +46,17 @@ def dispersion(prior, origin, horizon, field='forecast', horizons=4):
     return fit_size([r[field] for r in eligible], [r['true_value'] for r in eligible]), 'mle', len(eligible)
 
 
-def interval_quantiles(point, size, rng, draws=5000, initial=False):
+def interval_quantiles(point, size, rng, draws=5000, initial=False, probabilities=QUANTILES):
     if draws < 1 or not np.isfinite(point) or point < 1 or not np.isfinite(size) or size <= 0:
         raise ValueError('Invalid negative-binomial parameters')
     mean = point + 1 if initial else point
     sims = rng.negative_binomial(size, size / (size + mean), size=draws)
-    quantiles = np.quantile(sims, QUANTILES)
+    probabilities = np.asarray(probabilities,float)
+    median = np.flatnonzero(np.isclose(probabilities,.5))
+    if len(median)!=1: raise ValueError('Quantile grid must contain one median')
+    quantiles = np.quantile(sims, probabilities)
     # Match upstream median recentering, including possibly negative lower bounds.
-    return point + quantiles - quantiles[3]
+    return point + quantiles - quantiles[median[0]]
 
 
 def scores(quantiles, actual):
@@ -63,3 +71,22 @@ def scores(quantiles, actual):
                 coverage_80=int(values[1] < actual <= values[5]),
                 coverage_95=int(values[0] < actual <= values[6]),
                 width_95=float(values[6]-values[0]))
+
+
+def calibration_plan(prior,origin,horizons=4,policy='matured'):
+    """Default is causal. Figure 2's retrospective convention must be explicit."""
+    result={}
+    for field in ['forecast','baseline']:
+        for horizon in range(1,horizons+1):
+            size,method,count=dispersion(prior,origin,horizon,field,horizons,policy)
+            excluded=sum(r['horizon']==horizon and r['target_end_date']<=origin and
+                         np.isfinite(r['true_value']) and r['true_value']<0 for r in prior)
+            result[(field,horizon)]=dict(size=size,method=method,count=count,excluded_negative=excluded)
+    return result
+
+
+def coverage_rows(values,actual,probabilities=LONG_QUANTILES):
+    probabilities=np.asarray(probabilities)
+    values=np.asarray(values)
+    return [dict(level=round(float(1-2*probabilities[i]),10),lower_probability=float(probabilities[i]),upper_probability=float(probabilities[-i-1]),lower=float(values[i]),upper=float(values[-i-1]),
+                 covered=int(values[i]<actual<=values[-i-1])) for i in range(len(probabilities)//2)]

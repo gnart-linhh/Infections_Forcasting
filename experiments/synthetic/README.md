@@ -1,62 +1,51 @@
-# Thí nghiệm 01 — sinh synthetic data bằng Python
+# Bước 1 — full synthetic generation bằng Python
 
-Pipeline chạy độc lập, không cần R, SLURM, COVID truth hoặc repo clone `precog/`.
-
-## Cài đặt và chạy
-
-Chạy từ thư mục gốc project:
+Mặc định theo `run_smoa.R`: **18.387 attempts mỗi family × 3 = 55.161 attempts**.
+Không có chế độ demo/preview mặc định.
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r experiments/synthetic/requirements.txt
-.venv/bin/python experiments/synthetic/generate_python.py \
-  --num-curves 10 --output-dir outputs/synthetic_demo
+.venv/bin/python -u experiments/synthetic/generate_python.py \
+  --workers 4 --output-dir outputs/reproduction_full/01_synthetic
 ```
 
-`--num-curves` là số lần sinh mỗi nhóm, tổng ba nhóm. Cấu hình số lượng trong
-code bài báo là 18.387 mỗi nhóm; nên kiểm tra với số nhỏ trước.
-Thư mục output phải trống để tránh ghi đè.
+Dùng [entrypoint toàn pipeline](../../README.md) nếu muốn tiếp tục tự động sang
+full BO → UQ → prediction → evaluation.
 
-## Output và tái lập
+## Generator
 
-- `curves.csv`: ID, seed, nhóm, cadence, scale, seasonal, step và value.
-- `metadata.json`: cấu hình, số mẫu thành công/lỗi, phiên bản Python/NumPy/SciPy
-  và checksum module sinh dữ liệu.
+1. `sir_rollercoaster`: cộng 3–7 sóng SIR I(t), reproduction
+   `1.1+Beta(1,3)*20`, gamma `1/Uniform(1,10)`, Dirichlet initial states;
+   cadence 10–52 không hoàn lại.
+2. `sir_rollercoaster_wiggle`: nhiều sóng, thêm biến điệu sin.
+3. `seasonal`: 5–15 sóng, lặp cách 52 bước, weekly/monthly cadence.
+4. Beta observation noise, log-uniform peak .0005–.25, proportion/counts,
+   final floor 1e-10. Monthly bins theo `floor((1:n)/4)` như R.
 
-Mỗi mẫu dùng RNG riêng, seed bằng `seed_offset + curve_id`. ID bắt đầu từ 1;
-nhóm xếp liên tiếp. Đổi số mẫu mỗi nhóm làm đổi seed của nhóm sau.
-`step` không phải ngày lịch. Seasonal có thể có cadence weekly hoặc monthly.
-Không sinh bù mẫu trả về không hợp lệ.
+`source-structure-v2` dùng SciPy LSODA và NumPy RNG; không tương đương từng số
+với R/deSolve. Invalid curve/`None` được bỏ và log như nguồn; không tự sinh bù.
+Metadata phân biệt `attempted_total`, `accepted_total`, `accepted` mỗi family
+và `failed`, không báo sai số lượng khi một attempt thất bại.
 
-Đây là bản chuyển phương pháp sang Python, chưa được xác nhận tương đương số học
-với kết quả tác giả: RNG, ODE solver, thứ tự lấy mẫu và một số chi tiết
-padding/aggregation khác code gốc. Cùng seed cho kết quả tái lập trong cùng
-môi trường Python, không có nghĩa khớp từng số với R.
+## Output và resume
 
-## Phương pháp trong code gốc
+- `curves.csv`: chỉ xuất hiện khi thư viện hoàn tất, grouped theo curve ID.
+- `curves.csv.partial`, `checkpoint.json`: khi đang sinh; checkpoint mỗi 500 attempts.
+- `metadata.json`: status, số lượng, seed, code/data hashes và phiên bản thư viện.
+- `run.lock`: khóa process đang ghi.
 
-Nguồn: `precog/smoa/R/run_smoa.R` (khối Generate Synthetic List for Training)
-và `precog/smoa/R/smoa_helpers.R` (`sir`, `gen_curve`).
+```bash
+.venv/bin/python -u experiments/synthetic/generate_python.py \
+  --workers 4 --output-dir outputs/reproduction_full/01_synthetic --resume
+```
 
-1. `sir_rollercoaster`: cộng 3–7 sóng SIR, lấy quỹ đạo **I(t)**; tham số reproduction
-   `1.1 + Beta(1,3)*20`, gamma nghịch đảo Uniform(1,10), trạng thái ban đầu
-   Dirichlet(1000,0.1,0.1); khoảng cách sóng lấy từ 10–52.
-2. `sir_rollercoaster_wiggle`: cùng ý tưởng nhiều sóng, thêm biến điệu sin.
-3. `seasonal`: lặp sóng SIR cách 52 bước, 5–15 sóng, có thể có xu hướng biên độ;
-   ngẫu nhiên chọn cadence weekly/monthly.
-4. Thêm beta noise, đổi đỉnh theo log-uniform từ 0.0005 tới 0.25; chọn proportion
-   hoặc counts (nhân dân số); chặn giá trị nhỏ nhất ở `1e-10`.
+Resume truncate phần CSV sau byte offset đã checkpoint rồi tiếp tục đúng seed,
+không nhân đôi dòng. Worker processes không làm đổi thứ tự hay RNG theo curve.
+Seed mặc định `curve_id=1..55161`, theo ý tưởng set.seed(i) của runner R; NumPy
+không cho cùng số với R. `step` là bước cadence, không phải ngày lịch.
 
-Lưu ý I(t) là số đang nhiễm trong mô hình; incidence trong helper còn được lưu
-để lấy thông tin đỉnh, không phải chuỗi chính được cộng thành synthetic curve.
-`gen_curve_lhs` có trong helper nhưng không được gọi trong khối sinh dữ liệu của
-`run_smoa.R`, nên pipeline này dùng `gen_curve`.
+BO không cố định `num_curves=18387`: ở bước 2 mỗi candidate sinh bank riêng
+10k–30k attempts/family. Prediction sử dụng bank của BO winner; thư viện bước
+1 dùng để đối chiếu generation ở quy mô công bố và EDA, không giả làm winner.
 
-## Nguồn và bản quyền
-
-Tham khảo [LANL/precog SMOA](https://github.com/lanl/precog/tree/main/smoa),
-commit local tham chiếu `aba1948d228e5380d72907048236601874b53cac`.
-Các đường dẫn R ở phần mô tả trên là vị trí trong nguồn tác giả, không phải
-dependency của project này. `generator.py` tách từ Python mini-port local đã có;
-giữ phần sinh đường cong, bỏ các hàm forecasting/scoring chưa cần trong bước 1.
-`reference/UPSTREAM_README.md` lưu thông tin bản quyền và BSD-3 License gốc.
+Nguồn: LANL/precog SMOA, commit `aba1948d228e5380d72907048236601874b53cac`.
+`reference/UPSTREAM_LICENSE` lưu BSD-3 License và thông tin bản quyền gốc.

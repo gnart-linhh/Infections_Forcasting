@@ -1,222 +1,139 @@
-from __future__ import annotations #Đảm bảo các annotation kiểu dữ liệu (type hints) được xử lý dưới dạng chuỗi (string), giúp tương thích tốt hơn với Python cũ và tránh lỗi khi tham chiếu lớp chưa định nghĩa.
+"""Structural Python port of gen_curve in LANL smoa_helpers.R.
 
-from dataclasses import dataclass 
-
+NumPy RNG and SciPy LSODA are numerical ports, not R bitwise equivalents.
+"""
+from __future__ import annotations
+from dataclasses import dataclass
 import numpy as np
-from scipy.integrate import solve_ivp #để giải hệ phương trình vi phân thường (ODE) của mô hình SIR.
+from scipy.integrate import solve_ivp
+from scipy.special import expit
+
+GENERATOR_VERSION='source-structure-v2'
 
 
 @dataclass
 class SyntheticCurve:
-    ts: np.ndarray # Mảng chứa chuỗi thời gian của các ca nhiễm
-    curve_type: str # Loại đường cong (ví dụ: seasonal, sir_rollercoaster)
-    time_cadence: str # Đơn vị thời gian (hàng tuần - weekly, hàng tháng - monthly)
-    scale: str # Thang đo dữ liệu (tỷ lệ - proportion, hoặc số ca tuyệt đối - counts)
-    seasonal: bool # Có tính chu kỳ mùa vụ hay không
+    ts: np.ndarray
+    curve_type: str
+    time_cadence: str
+    scale: str
+    seasonal: bool
 
+# Mô phỏng một đợt dịch
+def sir(beta,gamma,s0,i0,r0,times):
+    def equations(time,state):
+        s,i,r=state
+        return [-beta*i*s,beta*i*s-gamma*i,gamma*i]
+    sol=solve_ivp(equations,(float(times[0]),float(times[-1])),[s0,i0,r0],
+        t_eval=np.asarray(times,float),method='LSODA',rtol=1e-6,atol=1e-6)
+    if not sol.success or not np.all(np.isfinite(sol.y)): raise RuntimeError('SIR solver failed')
+    s,i,r=sol.y
+    return dict(S=s,I=i,R=r,incidence=np.r_[np.nan,-np.diff(s)]) # incidence is the negative change in susceptibles, prepended with NaN to match the length of times
 
-def sir(beta: float, gamma: float, s0: float, i0: float, r0: float, times: np.ndarray) -> dict[str, np.ndarray]:
-    """Solve the SIR system used by the original R helper."""
+#Cắt phần đầu và cuối của chuỗi
+def trim_tails(ts):
+    """Translate R's 1-based, inclusive tail removals exactly."""
+    active=np.flatnonzero(ts>1e-3)
+    if not len(active): return ts
+    cut=int(active[0])+1-10
+    if 1<cut<len(ts)-10: ts=ts[cut:]
+    active=np.flatnonzero(ts>1e-3)
+    cut=int(active[-1])+1+10
+    if 10<cut<len(ts): ts=ts[:cut-1]
+    return ts
 
-    #Định nghĩa hệ phương trình vi phân SIR
-    def equations(_time: float, y: np.ndarray) -> list[float]:
-        s, i, r = y
-        return [-beta * i * s, beta * i * s - gamma * i, gamma * i]
+#Gộp dữ liệu theo tháng
+def monthly_aggregate(ts):
+    # R index=floor((1:length(ts))/4): first bin has 3 steps, not 4.
+    return np.bincount(np.arange(1,len(ts)+1)//4,weights=ts)
 
-    #giải hệ ODE từ thời điểm đầu đến cuối, lấy giá trị tại các mốc times
-    sol = solve_ivp(
-        equations,
-        (float(times[0]), float(times[-1])),
-        [s0, i0, r0],
-        t_eval=times.astype(float),
-        rtol=1e-6, #độ chính xác tương đối
-        atol=1e-9, #độ chính xác tuyệt đối 
-    )
-    if not sol.success:
-        raise RuntimeError(sol.message)
+#Thêm nhiễu ngẫu nhiên
+def beta_observations(ts,alpha,rng):
+    """R beta limit distributions at probabilities 0 and 1, without epsilon bias."""
+    if np.any(ts < -1e-8) or np.any(ts > 1+1e-8): raise ValueError('Invalid beta probabilities')
+    ts=np.clip(ts,0,1)
+    obs=np.zeros(len(ts));obs[ts==1]=1
+    inside=(ts>0)&(ts<1)
+    obs[inside]=rng.beta(alpha*ts[inside],alpha*(1-ts[inside]))
+    return obs
 
-    s, i, r = sol.y #Lấy kết quả S, I, R.
-    incidence = np.concatenate([[np.nan], -np.diff(s)]) #incidence (số ca mới) ≈ −ΔS (sự giảm của nhóm dễ nhiễm).
-    return {"S": s, "I": i, "R": r, "incidence": incidence}
+# Lấy thứ tự có trọng số
+def weighted_order(rng,weights):
+    return rng.choice(len(weights),len(weights),replace=False,p=weights/np.sum(weights))
 
-#Chọn thứ tự ngẫu nhiên có trọng số (không lặp lại). Dùng để sắp xếp các đợt sóng theo kích thước hoặc khoảng cách một cách “ngẫu nhiên có thiên hướng”.
-def _weighted_choice_order(rng: np.random.Generator, n: int, weights: np.ndarray) -> np.ndarray:
-    weights = np.asarray(weights, dtype=float) #chuyển weight thành mảng numpy số thực
-    weights = weights / weights.sum() #chuyển trọng số thành xác suất
-    return rng.choice(np.arange(n), size=n, replace=False, p=weights)
+# Sinh một đợt dịch SIR hoàn chỉnh
+def solve_wave(reproduction,gamma,initial,rng,seasonal=False):
+    for attempt in range(5):
+        try:
+            output=sir(reproduction/initial[0]*gamma,gamma,*initial,np.arange(1,501))
+            # Bound tiny negative solver roundoff before assembling probabilities.
+            return np.maximum(output['I'],0)
+        except RuntimeError:
+            reproduction=(1.2+rng.beta(1,3)*10) if seasonal else (1.1+rng.beta(1,3)*20)
+            gamma=1/rng.uniform(1,10);initial=rng.dirichlet([1000,.1,.1])
+    return np.full(500,.01)  # finite, bounded numerical fallback; logged by version
 
-#Cắt bỏ phần đầu và cuối của chuỗi thời gian nếu giá trị quá nhỏ (dưới ngưỡng), chỉ giữ lại phần có tín hiệu + một chút padding.
-def _trim_small_tails(ts: np.ndarray, threshold: float = 1e-3, pad: int = 10) -> np.ndarray:
-    idx = np.flatnonzero(ts > threshold) #tìm và trả về một mảng chứa chỉ số (vị trí) của tất cả các phần tử trong ts lớn hơn mức threshold
-    if idx.size == 0:
-        return ts
-    start = max(0, idx[0] - pad)
-    end = min(len(ts), idx[-1] + pad)
-    return ts[start:end]
-
-#Sinh một sóng dịch đơn lẻ từ mô hình SIR.
-def _single_sir_wave(rng: np.random.Generator, reproduction: float | None = None) -> tuple[np.ndarray, dict[str, float]]:
-    reproduction = float(reproduction if reproduction is not None else 1.1 + rng.beta(1, 3) * 20) #Số tái sản xuất cơ bản R₀. Nếu không cho sẵn thì lấy ngẫu nhiên (thường từ khoảng 1.1 đến ~21)
-    gamma = 1.0 / rng.uniform(1, 10) #tốc độ hồi phục (thời gian nhiễm từ 1–10 đơn vị thời gian).
-    s0, i0, r0 = rng.dirichlet([1000, 0.1, 0.1]) #đảm bảo tổng 3 giá trị này luôn bằng 1. Quần thể S chiếm đa số (trọng số 1000), còn I và R rất nhỏ (0.1)
-    beta = (reproduction / s0) * gamma
-    times = np.arange(1, 501)
-
-    for _ in range(5):
-        out = sir(beta, gamma, s0, i0, r0, times)
-        wave = np.maximum(np.asarray(out["I"], dtype=float), 0.0)
-        if np.all(np.isfinite(wave)):
-            break
-        reproduction = float(1.1 + rng.beta(1, 3) * 20)
-        gamma = 1.0 / rng.uniform(1, 10)
-        s0, i0, r0 = rng.dirichlet([1000, 0.1, 0.1])
-        beta = (reproduction / s0) * gamma
+#Hàm sinh chuỗi chính
+def gen_curve(curve_type,rng=None):
+    rng=rng if rng is not None else np.random.default_rng()
+    if curve_type not in ['sir_rollercoaster','sir_rollercoaster_wiggle','seasonal']:
+        raise ValueError(f'Unknown family: {curve_type}')
+    seasonal=curve_type=='seasonal'
+    if not seasonal:
+        nwaves=int(rng.integers(3,8))
+        reproduction=1.1+rng.beta(1,3,nwaves)*20
+        ordering=rng.choice(['increasing','decreasing','random'])
+        if ordering!='random':
+            order=weighted_order(rng,reproduction)
+            reproduction=reproduction[order[::-1] if ordering=='increasing' else order]
+        gamma=1/rng.uniform(1,10,nwaves)
+        initial=rng.dirichlet([1000,.1,.1],size=nwaves)
+        cadence=rng.choice(np.arange(10,53),size=nwaves,replace=False)
+        cadence=cadence[weighted_order(rng,cadence.max()+1-cadence)]
+        start=1;waves=[]
+        for j in range(nwaves):
+            wave=solve_wave(reproduction[j],gamma[j],initial[j],rng)
+            active=np.flatnonzero(wave/max(float(wave.max()),1e-300)>1e-4)
+            wave=wave[:active[-1]+1] if len(active) else wave
+            shifted=np.r_[np.zeros(start),wave]
+            limit=float(np.quantile(shifted,.01))+1e-9
+            waves.append(np.r_[rng.uniform(0,limit,20),shifted,rng.uniform(0,limit,20)])
+            start+=int(cadence[j])
+        ts=np.zeros(max(map(len,waves)))
+        for wave in waves: ts[:len(wave)]+=wave
+        ts/=max(float(ts.max()),1e-300);ts=trim_tails(ts)
+        if curve_type=='sir_rollercoaster_wiggle':
+            mult=rng.uniform(1,2);period=len(ts)/rng.uniform(np.sqrt(2),np.sqrt(10))**2
+            ts*=1+mult*(1+rng.choice([-1,1])*np.sin(np.pi*np.arange(1,len(ts)+1)/period))
+            ts/=max(float(ts.max()),1e-300)
+        limit=float(np.quantile(ts,.011))+1e-9
+        ts=np.r_[rng.uniform(0,limit,20),ts,rng.uniform(0,limit,20)]
     else:
-        wave = np.repeat(0.01, len(times))
-        out = {"incidence": np.zeros_like(wave)}
-
-    scaled = wave / max(float(np.nanmax(wave)), 1e-12)
-    active = np.flatnonzero(scaled > 1e-4)
-    if active.size:
-        wave = wave[: active[-1] + 1]
-
-    incidence = np.asarray(out["incidence"], dtype=float)
-    incidence[0] = 0.0
-    params = {
-        "pit": float(np.nanargmax(incidence)), #Peak Incidence Time
-        "piv": float(np.nanmax(incidence)), #Peak Incidence Value
-        "s0": float(s0),
-        "i0": float(i0),
-        "r0": float(r0),
-    }
-    return wave, params
-
-
-def gen_curve(curve_type: str, rng: np.random.Generator | None = None) -> SyntheticCurve | None:
-    """Generate one synthetic curve following the R `gen_curve` structure."""
-
-    rng = rng or np.random.default_rng()
-    if curve_type not in {"sir_rollercoaster", "sir_rollercoaster_wiggle", "seasonal"}:
-        raise ValueError(f"unsupported curve_type: {curve_type}")
-
-    seasonal = curve_type == "seasonal"
-
-    if curve_type in {"sir_rollercoaster", "sir_rollercoaster_wiggle"}:
-        nwaves = int(rng.integers(3, 8)) #sinh 3-7 giá trị R0 khác nhau
-        reproduction = 1.1 + rng.beta(1, 3, size=nwaves) * 20
-        #Sắp xếp thứ tự các sóng theo R₀ tăng dần, giảm dần hoặc ngẫu nhiên.
-        order_type = rng.choice(["increasing", "decreasing", "random"])
-        if order_type == "increasing":
-            reproduction = reproduction[_weighted_choice_order(rng, nwaves, reproduction)[::-1]]
-        elif order_type == "decreasing":
-            reproduction = reproduction[_weighted_choice_order(rng, nwaves, reproduction)]
-        
-        #Khoảng cách giữa các sóng (10–52 tuần), ưu tiên khoảng cách nhỏ hơn một chút.
-        cadence = rng.integers(10, 53, size=nwaves)
-        cadence = cadence[_weighted_choice_order(rng, nwaves, cadence.max() + 1 - cadence)]
-        
-        #Sinh từng sóng, thêm phần “đệm” nhỏ ở đầu/cuối, và dịch chuyển theo thời gian.
-        start = 1
-        waves: list[np.ndarray] = []
-        for jj in range(nwaves):
-            wave, _params = _single_sir_wave(rng, float(reproduction[jj]))
-            prefix = rng.uniform(0, np.quantile(wave, 0.01) + 1e-9, size=20)
-            suffix = rng.uniform(0, np.quantile(wave, 0.01) + 1e-9, size=20)
-            waves.append(np.concatenate([np.zeros(start), prefix, np.nan_to_num(wave), suffix]))
-            start += int(cadence[jj])
-
-        #Cộng tất cả sóng lại (chồng lên nhau) rồi chuẩn hóa về [0, 1] và cắt đuôi nhỏ.
-        length = max(len(x) for x in waves)
-        ts = np.zeros(length)
-        for wave in waves:
-            ts[: len(wave)] += wave
-        ts = ts / max(float(ts.max()), 1e-12)
-        ts = _trim_small_tails(ts)
-
-        #Thêm hiệu ứng “lắc lư” bằng cách nhân với một sóng sin biến đổi biên độ.
-        if curve_type == "sir_rollercoaster_wiggle":
-            mult_squish = rng.uniform(1, 2)
-            mult_period = len(ts) / rng.uniform(np.sqrt(2), np.sqrt(10)) ** 2
-            sign = rng.choice([-1, 1])
-            mult_sin = 1 + mult_squish * (1 + sign * np.sin((np.pi * np.arange(1, len(ts) + 1)) / mult_period))
-            ts = np.maximum(0, mult_sin * ts)
-            ts = ts / max(float(ts.max()), 1e-12)
-
-        #Thêm phần nền nhỏ ở đầu và cuối. Đơn vị thời gian luôn là weekly.
-        ts = np.concatenate(
-            [
-                rng.uniform(0, np.quantile(ts, 0.011) + 1e-9, size=20),
-                ts,
-                rng.uniform(0, np.quantile(ts, 0.011) + 1e-9, size=20),
-            ]
-        )
-        time_cadence = "weekly"
-
-    #Sinh 5–15 sóng giống nhau (cùng hình dạng), chỉ khác kích thước.
-    else:
-        nwaves = int(rng.integers(5, 16))
-        wave, _params = _single_sir_wave(rng, float(1.2 + rng.beta(1, 3) * 10))
-        
-        #70% trường hợp có xu hướng tăng/giảm dần kích thước các sóng theo năm, 30% giữ nguyên kích thước.
-        trend = rng.choice([1, 2], p=[0.7, 0.3])
-        if trend == 1:
-            z = rng.normal(0, 0.5) * np.arange(1, nwaves + 1)
-            prop_scale = (np.exp(z) / (1 + np.exp(z)))
-            prop_scale = prop_scale / prop_scale[0]
-        else:
-            prop_scale = np.ones(nwaves)
-
-        #Đặt các sóng cách nhau đúng 52 tuần (1 năm), cắt bỏ năm đầu và nửa năm cuối.
-        period = max(52, len(wave))
-        ts = np.zeros(nwaves * period)
-        for jj in range(nwaves):
-            start = 52 * jj
-            ts[start : start + len(wave)] += prop_scale[jj] * wave
-        ts = ts[: int(52 * nwaves)]
-        if ts.max() > 1:
-            ts = ts / ts.max()
-        ts = ts[52:-26]
-
-        #Ngẫu nhiên chọn weekly hoặc monthly. Nếu monthly thì gộp 4 tuần thành 1 tháng.
-        time_cadence = rng.choice(["monthly", "weekly"])
-        if time_cadence == "monthly":
-            n_months = int(np.ceil(len(ts) / 4))
-            ts = np.array([ts[i * 4 : (i + 1) * 4].sum() for i in range(n_months)])
-            if ts.max() > 1:
-                ts = ts / ts.max()
-
-    #Thêm nhiễu quan sát bằng phân phối Beta (mô phỏng tỷ lệ quan sát được với độ tin cậy alpha)
-    ts = np.maximum(ts, 1e-9)
-    alpha = float(np.exp(rng.uniform(np.log(5e1), np.log(1e4))))
-    # Keep beta parameters strictly positive even when ts is close to one.
-    obs = rng.beta(np.maximum(alpha * ts, 1e-9), np.maximum(alpha * (1 - np.minimum(ts, 1 - 1e-9)), 1e-9))
- 
-    #Chuẩn hóa lại để đỉnh của đường cong nằm trong khoảng 0.05% – 25%.
-    peak_incidence = float(np.exp(rng.uniform(np.log(0.0005), np.log(0.25))))
-    obs = (obs / max(float(obs.max()), 1e-12)) * peak_incidence
-
-    #Ngẫu nhiên chọn:
-    #proportion: giữ nguyên tỷ lệ (0–1)
-    #counts: nhân với dân số (từ ~200 nghìn đến 100 triệu) rồi làm tròn thành số nguyên.
-    scale = rng.choice(["proportion", "counts"])
-    if scale == "counts":
-        population = int(round(rng.uniform(np.sqrt(2e5), np.sqrt(1e8)) ** 2))
-        obs = np.round(population * obs)
-
-    #Nếu có giá trị không hợp lệ thì trả về None
-    if not np.all(np.isfinite(obs)):
-        return None
-
-    #Nếu đỉnh xuất hiện quá sớm (< 30 bước) thì thêm một đoạn nền nhỏ ở đầu để đường cong trông tự nhiên hơn.
-    if int(np.argmax(obs)) < 30 and not seasonal:
-        prefix_len = int(rng.integers(10, 18))
-        obs = np.concatenate([rng.uniform(0, np.quantile(obs, 0.05) + 1e-9, size=prefix_len), obs])
-
-    return SyntheticCurve(
-        ts=np.maximum(obs.astype(float), 1e-10),
-        curve_type=curve_type,
-        time_cadence=str(time_cadence),
-        scale=str(scale),
-        seasonal=seasonal,
-    )
-
+        nwaves=int(rng.integers(5,16))
+        reproduction=1.2+rng.beta(1,3)*10
+        gamma=1/rng.uniform(1,10);initial=rng.dirichlet([1000,.1,.1])
+        wave=solve_wave(reproduction,gamma,initial,rng,seasonal=True)  # keep all 500 steps
+        if rng.choice([1,2],p=[.7,.3])==1:
+            factors=expit(rng.normal(0,.5)*np.arange(1,nwaves+1));factors/=factors[0]
+        else: factors=np.ones(nwaves)
+        ts=np.zeros(nwaves*max(52,len(wave)))
+        for j in range(nwaves): ts[52*j:52*j+len(wave)]+=factors[j]*wave
+        ts=ts[:52*nwaves]
+        if ts.max()>1: ts/=ts.max()
+        ts=ts[52:-27]  # R removes 1:52 and an inclusive final 27 values
+    cadence='weekly'
+    if seasonal:
+        cadence=str(rng.choice(['monthly','weekly']))
+        if cadence=='monthly':
+            ts=monthly_aggregate(ts)
+            if ts.max()>1: ts/=ts.max()
+    scale=str(rng.choice(['proportion','counts']))  # before alpha, as in R
+    alpha=np.exp(rng.uniform(np.log(50),np.log(10000)))
+    obs=beta_observations(ts,alpha,rng)
+    if not np.all(np.isfinite(obs)) or obs.max()<=0: return None
+    peak=np.exp(rng.uniform(np.log(.0005),np.log(.25)))
+    obs=obs/obs.max()*peak
+    if scale=='counts': obs=np.rint(np.rint(rng.uniform(np.sqrt(2e5),np.sqrt(1e8))**2)*obs)
+    if np.argmax(obs)+1<30 and not seasonal:
+        obs=np.r_[rng.uniform(0,float(np.quantile(obs,.05))+1e-9,int(rng.integers(10,18))),obs]
+    return SyntheticCurve(np.maximum(obs,1e-10),curve_type,cadence,scale,seasonal)

@@ -3,10 +3,14 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import shutil
 from pathlib import Path
 import numpy as np
 from model import load_library
 from run_backtest import parser, run_experiment
+from selection import apply_selection
+from neighbors import ExactNeighbors
+from runtime import acquire_run_lock,atomic_json,file_hash
 
 
 def aggregate(rows):
@@ -34,6 +38,7 @@ def main():
     p.description = __doc__
     p.add_argument('--manifest', type=Path, required=True, help='CSV: series,truth,as_of_truth; relative paths resolve beside manifest')
     p.add_argument('--history-mode', choices=['final', 'as_of'], default='final')
+    p.add_argument('--resume',action='store_true',help='Continue a run with the same inputs, parameters and code')
     a = p.parse_args()
     if a.truth or a.as_of_truth:
         p.error('Supply truth paths through manifest, not --truth or --as-of-truth')
@@ -53,17 +58,35 @@ def main():
             p.error(f'Missing as-of truth: {entry["series"]}')
         if a.history_mode == 'final' and entry['as_of_truth']:
             p.error('Manifest contains as-of paths; select --history-mode as_of explicitly')
-    if a.output_dir.exists() and any(a.output_dir.iterdir()):
-        p.error('Output directory must be empty')
-    embeddings = load_library(a.synthetic, a.k, a.h)
+    if a.output_dir.exists() and any(a.output_dir.iterdir()) and not a.resume:
+        p.error('Output directory must be empty; use --resume to continue')
+    apply_selection(a)
     a.output_dir.mkdir(parents=True, exist_ok=True)
+    run_lock=acquire_run_lock(a.output_dir/'run.lock')
+    config={k:str(v) if isinstance(v,Path) or hasattr(v,'isoformat') else v for k,v in vars(a).items() if k!='resume'}
+    config['input_hashes']={str(path):file_hash(path) for path in [a.synthetic,a.manifest]+[
+        entry[field] for entry in entries for field in ['truth','as_of_truth'] if entry[field]]}
+    config['source_hashes']={name:file_hash(Path(__file__).with_name(name)) for name in
+        ['run_benchmark.py','run_backtest.py','model.py','smoothing.py','neighbors.py','prediction.py','snapshots.py','uncertainty.py']}
+    if (a.output_dir/'run_config.json').exists():
+        if json.loads((a.output_dir/'run_config.json').read_text())!=config: p.error('Resume config/input/source differs')
+    else: atomic_json(a.output_dir/'run_config.json',config)
+    if (a.output_dir/'metadata.json').exists() and (a.output_dir/'summary.json').exists():
+        print('Benchmark already complete and verified.',flush=True)
+        return
+    embeddings = load_library(a.synthetic, a.k, a.h)
+    neighbor_index=ExactNeighbors(embeddings[0])
     summaries, state_rows, horizon_rows = [], [], []
     output = a.output_dir
     for i, entry in enumerate(entries, 1):
         config = type(a)(**vars(a))
         config.truth = entry['truth']; config.as_of_truth = entry['as_of_truth']
         config.series = entry['series']; config.output_dir = output/f'{i:02d}'
-        summary = run_experiment(config, embeddings=embeddings)
+        if a.resume and (config.output_dir/'metadata.json').exists() and (config.output_dir/'summary.json').exists():
+            summary=json.loads((config.output_dir/'summary.json').read_text())
+        else:
+            if a.resume and config.output_dir.exists(): shutil.rmtree(config.output_dir)
+            summary = run_experiment(config, embeddings=embeddings,neighbor_index=neighbor_index)
         summaries.append(summary)
         metrics = summary['overall']
         row = dict(series=summary['series'], origins=summary['origins'], warmup_origins=summary['warmup_origins'],
@@ -93,7 +116,7 @@ def main():
     metadata = dict(config={k:str(v) if isinstance(v,Path) or hasattr(v,'isoformat') else v for k,v in vars(a).items()},
         manifest_sha256=hashlib.sha256(a.manifest.read_bytes()).hexdigest(),
         source_sha256={name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-                       for name in ['run_benchmark.py','run_backtest.py','model.py','snapshots.py','uncertainty.py']},
+                       for name in ['run_benchmark.py','run_backtest.py','model.py','smoothing.py','snapshots.py','uncertainty.py']},
         status='complete', notes=['Per-series outputs include input checksums and environment versions',
                                   'Same synthetic library and hyperparameters across series; no tuning on scores',
                                   'Relative ratios use persistence+NB, not COVIDHub ensemble'])

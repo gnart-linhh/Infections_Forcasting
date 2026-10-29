@@ -7,19 +7,19 @@ import numpy as np
 
 
 class SnapshotTruth:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, negative_policy="reject"):
         self.snapshots = {}
         with path.open() as handle:
             for row in csv.DictReader(handle):
                 vintage = date.fromisoformat(row['as_of'])
                 target = date.fromisoformat(row['target_end_date'])
                 value = float(row['value'])
-                if target > vintage or not np.isfinite(value) or value < 0:
+                if target > vintage or not np.isfinite(value) or (value < 0 and negative_policy=='reject'):
                     raise ValueError('Snapshot targets must be <= as_of; values finite and nonnegative')
                 snapshot = self.snapshots.setdefault(vintage, {})
                 if target in snapshot:
                     raise ValueError(f'Duplicate snapshot target: {vintage}, {target}')
-                snapshot[target] = max(1.0, value)
+                snapshot[target] = value
         if not self.snapshots:
             raise ValueError('Empty snapshot archive')
 
@@ -31,7 +31,12 @@ class SnapshotTruth:
         snapshot = self.snapshots[origin]
         if set(snapshot) != set(expected_dates):
             raise ValueError(f'Snapshot history must match all weekly dates through {origin}')
-        return np.asarray([snapshot[d] for d in expected_dates])
+        return np.maximum(np.asarray([snapshot[d] for d in expected_dates]),1)
+
+
+    def raw_values(self, origin, dates):
+        if origin not in self.snapshots: raise ValueError(f'Missing exact as_of snapshot for {origin}')
+        return np.asarray([self.snapshots[origin][day] for day in dates],float)
 
 
 def calibration_rows(prior, origin, history_dates, history):
