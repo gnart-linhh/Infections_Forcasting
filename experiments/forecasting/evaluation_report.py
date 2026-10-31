@@ -9,9 +9,9 @@ import tempfile
 
 import numpy as np
 
-MODELS = ('smoa', 'persistence')
-LABELS = {'smoa': 'sMOA', 'persistence': 'Persistence'}
-COLORS = {'smoa': '#1768ac', 'persistence': '#c36b18'}
+MODELS = ('smoa',)
+LABELS = {'smoa': 'sMOA'}
+COLORS = {'smoa': '#1768ac'}
 KEYS = ('series', 'forecast_origin', 'target_end_date', 'horizon')
 
 
@@ -83,14 +83,10 @@ def _plot_evaluation(rows, quantiles, summary, output_dir):
                     ax.fill_between(dates, [lo for lo, _ in bounds], [hi for _, hi in bounds],
                                     color=COLORS['smoa'], alpha=alpha, linewidth=0)
                     interval_levels.add(label)
-            baseline = sorted((r for r in rows if r['model'] == 'persistence' and int(r['horizon']) == horizon),
-                              key=lambda r: r['target_end_date'])
             ax.plot(dates, [r['true_value'] for r in selected], color='#172537', marker='o',
                     markersize=4, linewidth=2.1, zorder=4)
             ax.plot(dates, [r['forecast'] for r in selected], color=COLORS['smoa'], marker='o',
                     markersize=3, linewidth=1.8, zorder=3)
-            ax.plot([date.fromisoformat(r['target_end_date']) for r in baseline],
-                    [r['forecast'] for r in baseline], color=COLORS['persistence'], linestyle='--', linewidth=1.5)
             metrics = summary['by_horizon'][str(horizon)]['smoa']
             ax.set_title(f"{horizon} week{'s' if horizon != 1 else ''} ahead · {len(selected)} forecasts", loc='left', pad=30)
             ax.text(0, 1.015, f"MAE {_number(metrics['mae'])}   |   WIS {_number(metrics.get('wis'))}",
@@ -106,8 +102,7 @@ def _plot_evaluation(rows, quantiles, summary, output_dir):
         for ax in list(axes.flat)[len(horizons):]:
             ax.set_visible(False)
         legend = [Line2D([], [], color='#172537', marker='o', label='Observed (raw final truth)'),
-                  Line2D([], [], color=COLORS['smoa'], label='sMOA'),
-                  Line2D([], [], color=COLORS['persistence'], linestyle='--', label='Persistence')]
+                  Line2D([], [], color=COLORS['smoa'], label='sMOA')]
         for label, alpha in (('50% predictive interval', .25), ('95% predictive interval', .12)):
             if label in interval_levels:
                 legend.append(Patch(facecolor=COLORS['smoa'], alpha=alpha, label=label))
@@ -120,14 +115,14 @@ def _plot_evaluation(rows, quantiles, summary, output_dir):
         fig, axes = plt.subplots(1, 2, figsize=(13, 4.8))
         fig.subplots_adjust(top=.77, bottom=.15, wspace=.25)
         fig.suptitle(f'{series} | Forecast error by horizon', fontsize=17, y=.97)
-        fig.text(.5, .885, 'Lower is better. Both models use the same issued forecast targets.', ha='center')
+        fig.text(.5, .885, 'sMOA error across forecast horizons. Lower is better.', ha='center')
         x = np.arange(len(horizons))
         for ax, metric in zip(axes, ('mae', 'wis')):
             available = all(metric in summary['by_horizon'][str(h)][m] for h in horizons for m in MODELS)
             if available:
                 for index, model in enumerate(MODELS):
                     values = [summary['by_horizon'][str(h)][model][metric] for h in horizons]
-                    bars = ax.bar(x + (index - .5) * .36, values, width=.36,
+                    bars = ax.bar(x, values, width=.6,
                                   color=COLORS[model], label=LABELS[model])
                     ax.bar_label(bars, labels=[f'{v:,.0f}' for v in values], padding=4, fontsize=9)
                 ax.set_ylim(0, max(ax.get_ylim()[1] * 1.18, 1))
@@ -158,11 +153,10 @@ def write_report(rows, quantiles, summary, prediction_dir, truth_path, output_di
         metrics = summary['models'][model]
         lines.append(f"| {LABELS[model]} | {summary['forecasts_per_model']} | {_number(metrics['mae'])} | {_number(metrics.get('wis'))} |")
     lines.extend(['', 'MAE/WIS tổng hợp là trung bình trên các cặp origin–horizon đã phát hành; '
-                  'một target tuần có thể được dự báo ở nhiều horizon. '
-                  'Persistence giữ nguyên giá trị quan sát cuối cùng tại origin.', ''])
+                  'một target tuần có thể được dự báo ở nhiều horizon.', ''])
     if artifacts:
         lines.extend(['## Dự báo và thực tế', '', '![Forecast vs actual](forecast_vs_actual.png)', '',
-                      'Đen: COVID thực tế. Xanh: sMOA. Cam nét đứt: persistence. '
+                      'Đen: COVID thực tế. Xanh: sMOA. '
                       'Vùng xanh là khoảng dự báo trung tâm 50% và 95% của sMOA nếu có quantiles. '
                       'Mỗi ô giữ một horizon cố định; các điểm liên tiếp đến từ những origin khác nhau.', '',
                       '## MAE và WIS theo horizon', '', '![MAE and WIS](metrics_by_horizon.png)', ''])
@@ -178,6 +172,10 @@ def write_report(rows, quantiles, summary, prediction_dir, truth_path, output_di
         history = 'historical as-of' if config.get('as_of_truth') else 'final truth (không phải vintage lịch sử)'
         lines.extend(['', f"History dùng cho dự báo: **{history}**. "
                       f"UQ calibration truth: `{config.get('calibration_truth', 'unspecified')}`."])
+        lines.extend(['',f"Bridge mode: `{config.get('bridge_mode','keep')}`. UQ policy: `{config.get('uq_policy','matured')}`."])
+        if config.get('uq_policy')=='figure2_retrospective':
+            lines.extend(['', '**Đánh giá hồi cứu:** UQ dùng final outcomes của các forecast đã phát trước đó, '
+                          'kể cả target chưa đến hạn. WIS/coverage không phải kết quả real-time causal.'])
         selection = config.get('selection_protocol', {})
         if selection:
             lines.extend(['', f"BO profile: `{selection.get('profile', 'custom')}`, "

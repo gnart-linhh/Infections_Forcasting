@@ -31,6 +31,28 @@ ablation. Không chọn biến thể theo lỗi COVID để gọi là phương p
 
 ## Run full legacy được giữ để đối chiếu
 
+Run mới với bộ paper, historical history và GAM ở `outputs/paper_full/`;
+[full protocol](experiments/reproduction/FULL.md). Test chung có **50 bang ×
+112 origins hàng tuần × 4 horizons = 22.400 targets/model**. Toàn bộ 112 JHU
+vintages đã dựng ở `outputs/paper_weekly_archive/`, đủ mỗi tuần từ 15/08/2020
+đến 01/10/2022; Arizona-only later dates không thuộc cửa sổ chung. Trạng thái
+và số liệu thực tế nằm trong pipeline.json/report, không dùng điểm legacy.
+
+Run full giữ bridge/matured trước đó có MAE 7.943,55, WIS 5.090,15 và coverage
+95% là 85,15%; được lưu riêng ở `outputs/paper_full_bridge_matured/`. **Full
+hiện tại đổi theo yêu cầu sang bỏ bridge + UQ hồi cứu**, dùng cả final outcomes
+của targets chưa đến hạn ở forecasts đã phát trước đó. Không gán điểm cũ cho
+quy ước mới. [Kết quả hiện hành](experiments/reproduction/FULL.md#results).
+
+Cả hai run mới đã hoàn tất trên 22.400 targets, **bỏ bridge + UQ hồi cứu**:
+paper MAE 7.384,66 / WIS 4.727,47; BO winner MAE 7.443,16 / WIS 4.734,66.
+Đây là đánh giá có future labels trong UQ, không phải kết quả real-time causal.
+
+BO với GAM ở `outputs/bo_gam/` đã hoàn tất đủ 104 evaluations, chọn
+N=29.357/k=7/m=5.167. Job
+`outputs/bo_gam_full/` chỉ bắt đầu khi selection và run paper complete, rồi
+chạy winner trên cùng archive, origins, labels, UQ/scoring code và seeds.
+
 `outputs/reproduction_full/` đã hoàn tất 104 BO evaluations, 50 bang,
 22.468 forecasts/model, dùng **final truth + spline cũ**. Winner:
 num_curves=29.357, k=7, closest=5.167; MAE 7.564,27, WIS 4.765,92;
@@ -49,7 +71,8 @@ mới. Figures 3–5 và ranking/calibration full chưa được chạy lại v�
 - BO: num_curves 10k–30k, k2–7, closest1k–6k; 99 LHS + 5 EI; mọi validation
   origin đủ điều kiện. Mỗi trial resample train/validation; shuffle/cap 50.
   Objective là MAE; independent test chỉ chạy sau chọn best observed trial.
-- Optimization/Figure 2 bỏ bridge; main prediction có bridge theo runner nguồn.
+- Optimization/Figure 2 bỏ bridge; `run_smoa.R` nguồn giữ bridge. Full hiện
+  chủ động dùng bỏ bridge theo yêu cầu, kết hợp với lịch test 50 bang × 112 tuần.
 - Default forecasting UQ dùng matured targets, main NB sizes [20,10,6,0.3].
   Giữ forecast<100 likelihood rule; zero outcomes hợp lệ. Negative labels bị
   loại khỏi NB likelihood và ghi count, nhưng giữ raw values để chấm điểm.
@@ -65,8 +88,8 @@ mới. Figures 3–5 và ranking/calibration full chưa được chạy lại v�
 | --- | --- |
 | RNG / ODE | NumPy/LSODA khác R/deSolve; synthetic curves không trùng từng số |
 | GAM | Cùng thin plate/GCV về mô hình toán; chưa có fitted-value fixtures mgcv để kiểm numerical parity |
-| BO | Python Gaussian/RBF GP và EI khác hetGP; 104 trials với GAM mới chưa chạy lại |
-| Historical data | Có phần Figure 2; chưa có archive 5,5 GB cho mọi bang/vintage |
+| BO | Python Gaussian/RBF GP và EI khác hetGP; đã chạy xong 104 trials với GAM, winner được kiểm chứng bằng artifact hashes |
+| Historical data | Có Figure 2 và đủ JHU vintages cho 50 bang × 112 tuần của full common test; chưa tải toàn bộ archive gốc 5,5 GB |
 | External models | Có baseline/ensemble Figure 2; chưa có archive scores toàn bộ models |
 | Original forecasts | Chưa có vector sMOA R gốc; không thể lượng hóa phần trăm giống hay xác nhận full-paper metrics |
 

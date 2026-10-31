@@ -90,3 +90,55 @@ kết quả thực nghiệm production.
 ```bash
 .venv/bin/python -m unittest discover -s experiments/optimization -v
 ```
+
+## BO GAM và so sánh winner với tham số paper
+
+```bash
+.venv/bin/python -u experiments/optimization/run_optimization.py \
+  --smoothing gam --compare-paper --workers 4 --seed 13 \
+  --output-dir outputs/bo_gam/02_optimization
+```
+
+Giữ nguyên **99 LHS + 5 EI**, mọi validation origin, train/validation resampling
+như source. `--compare-paper` chỉ thêm đánh giá sau selection, không đổi objective
+hay dùng test để chọn winner. Nó yêu cầu GAM và embedding `upstream`.
+
+- Test so sánh mới: 30 attempts/family, shuffle/cap 50 accepted curves, namespace
+  `[seed=13, role=2, trial=1, family, index]`. Khác standard/legacy heldout trial=0.
+  Protocol được ghi trong config trước khi chạy BO; test chỉ sinh sau selection.
+- Hai model dùng chính xác cùng test curves và target keys; origins bắt đầu từ
+  `max(k_winner,5)+1` observations để tránh chấm hai bên trên sample khác nhau.
+- Winner giữ đúng training bank được BO chọn. Paper dùng cùng training seed
+  namespace/trial và prefix family/index của bank đó, với 18.387 attempts/family.
+  Nếu cần mở rộng bank thì replay/extend cùng seed và kiểm shared curves trùng nhau.
+- So MAE pooled, theo horizon/family và delta paired; CI bootstrap resample cả
+  curve để giữ tương quan giữa các origin/horizon. Không tính WIS khi chưa có UQ.
+- Report chỉ xác nhận kết quả trên một seed/test, không khẳng định global optimum
+  hay điều chỉnh tiếp BO sau khi xem test.
+
+Kết quả khi job hoàn tất:
+`outputs/bo_gam/02_optimization/paper_comparison/report.md`, `metrics.csv`,
+`paired_forecasts.csv`, `metrics_by_horizon.csv`, `metrics_by_family.csv`,
+`summary.json` và `mae_comparison.png/.svg`. Fresh test và paper training được
+lưu NPZ kèm seed audit; metadata chỉ complete sau khi cả BO và comparison xong.
+
+Theo dõi:
+
+```bash
+.venv/bin/python experiments/status.py --output-dir outputs/bo_gam
+```
+
+Lượt chạy dài được khởi động từ bản code cố định tại
+`outputs/bo_gam/source_snapshot/` để sửa workspace không đổi generator giữa chừng.
+Log: `outputs/bo_gam/run.log`; PID/command/environment ở `launch.json` cùng folder.
+Nếu process bị ngắt, dùng đúng snapshot và cấu hình để resume:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+.venv/bin/python -u outputs/bo_gam/source_snapshot/experiments/optimization/run_optimization.py \
+  --smoothing gam --compare-paper --workers 4 --seed 13 \
+  --output-dir outputs/bo_gam/02_optimization --resume
+```
+
+Run snapshot vẫn dùng interpreter `.venv` của project. Các package NumPy/SciPy
+trong environment cần được giữ ổn định trong thời gian chạy.

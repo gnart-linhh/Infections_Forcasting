@@ -1,5 +1,7 @@
 """Exercise notebook cells with issued fixture forecasts, including plots and scores."""
 from contextlib import redirect_stdout
+import argparse
+import ast
 import csv
 from datetime import date, timedelta
 import io
@@ -16,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'experiments/forecasting'))
 from run_backtest import parser, run_experiment
 from runtime import atomic_json, file_hash
+from notebooks import execute_notebook
 
 
 def execute_cells(filename, overrides):
@@ -72,12 +75,74 @@ class NotebookTests(unittest.TestCase):
             self.assertAlmostEqual(scores.loc['smoa','mae'],expected['overall']['mae'])
             self.assertAlmostEqual(scores.loc['smoa','wis'],expected['overall']['wis'])
             self.assertEqual(evaluation_ns['summary']['forecasts_per_model'],8)
-            self.assertEqual(len(evaluation_ns['calibration_table']),22)
+            self.assertEqual(len(evaluation_ns['calibration_table']),11)
             images = [arg for call in display.call_args_list for arg in call.args
                       if getattr(arg,'format',None)=='png']
             self.assertGreaterEqual(len(images),5)
             self.assertTrue(all(image.data.startswith(b'\x89PNG') for image in images))
             self.assertTrue((root/'evaluation/report.md').is_file())
+
+
+class NotebookRunnerTests(unittest.TestCase):
+    def test_experiment_flags_dispatch_without_running_forecasts(self):
+        scripts = [('comparison', 'experiment_1'), ('library_characteristics', 'experiment_3'),
+                   ('analogue_quality', 'experiment_5'), ('probabilistic', 'experiment_6')]
+        for folder, stem in scripts:
+            with self.subTest(script=stem):
+                path = ROOT/'experiments'/folder/(stem+'.py')
+                tree = ast.parse(path.read_text())
+                entry = next(n for n in tree.body if isinstance(n, ast.If)
+                             and isinstance(n.test, ast.Compare)
+                             and isinstance(n.test.left, ast.Name) and n.test.left.id == '__name__')
+                def no_forecast(*args):
+                    self.fail('Notebook execution must not start a forecasting run')
+                namespace = dict(__name__='__main__', __file__=str(path), __doc__='', ROOT=ROOT,
+                    Path=Path, argparse=argparse, SEEDS=[0,1,2],
+                    LIBRARIES=['rollercoaster','wiggle','seasonal','mixed'],
+                    run=no_forecast, worker=no_forecast, smoa_worker=no_forecast)
+                with patch.object(sys, 'argv', [str(path), '--execute-notebook']), patch('notebooks.execute_notebook') as execute:
+                    exec(compile(ast.Module(body=[entry], type_ignores=[]), str(path), 'exec'), namespace)
+                    execute.assert_called_once_with(path.with_suffix('.ipynb'), working_dir=ROOT, timeout=600)
+
+    def test_uses_current_python_and_saves_completed_cells(self):
+        with tempfile.TemporaryDirectory() as tmp, patch('jupyter_client.KernelManager') as manager, patch('nbclient.NotebookClient') as client, redirect_stdout(io.StringIO()):
+            path = Path(tmp)/'example.ipynb'
+            nbformat.write(nbformat.v4.new_notebook(cells=[nbformat.v4.new_code_cell('print(42)')]), path)
+
+            def execute():
+                book = client.call_args.args[0]
+                book.cells[0].execution_count = 1
+                book.cells[0].outputs = [nbformat.v4.new_output('stream', name='stdout', text='42\n')]
+
+            client.return_value.execute.side_effect = execute
+            self.assertEqual(execute_notebook(path, working_dir=ROOT, timeout=60), path.resolve())
+            self.assertEqual(manager.return_value.kernel_spec.argv[0], sys.executable)
+            kwargs = client.call_args.kwargs
+            self.assertEqual(kwargs['resources']['metadata']['path'], str(ROOT))
+            self.assertEqual(kwargs['timeout'], 60)
+            self.assertIn('--HistoryManager.hist_file=:memory:', kwargs['extra_arguments'])
+            saved = nbformat.read(path, as_version=4)
+            self.assertEqual(saved.cells[0].outputs[0].text, '42\n')
+
+    def test_failed_execution_preserves_existing_notebook(self):
+        with tempfile.TemporaryDirectory() as tmp, patch('jupyter_client.KernelManager'), patch('nbclient.NotebookClient') as client:
+            path = Path(tmp)/'example.ipynb'
+            nbformat.write(nbformat.v4.new_notebook(cells=[nbformat.v4.new_code_cell('raise RuntimeError()')]), path)
+            original = path.read_bytes()
+            client.return_value.execute.side_effect = RuntimeError('cell failed')
+            with self.assertRaisesRegex(RuntimeError, 'cell failed'):
+                execute_notebook(path)
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_invalid_path_or_timeout_does_not_start_kernel(self):
+        with tempfile.TemporaryDirectory() as tmp, patch('jupyter_client.KernelManager') as manager:
+            path = Path(tmp)/'example.ipynb'
+            nbformat.write(nbformat.v4.new_notebook(), path)
+            with self.assertRaises(ValueError):
+                execute_notebook(path, timeout=0)
+            with self.assertRaises(ValueError):
+                execute_notebook(path.with_suffix('.py'))
+            manager.assert_not_called()
 
 
 if __name__ == '__main__':

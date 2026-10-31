@@ -3,6 +3,13 @@
 Pipeline: **synthetic → Bayesian optimization → UQ → prediction → evaluation**.
 Chỉ dùng Python; không cần R, SLURM hoặc đưa checkout `precog/` vào repo này.
 
+Run full với bộ paper hiện tại: [hướng dẫn và phạm vi](experiments/reproduction/FULL.md),
+[notebook](experiments/reproduction/full.ipynb), outputs `outputs/paper_full/`.
+50 bang × **112 origins hàng tuần** × 4 horizons, dùng snapshot lịch sử.
+Full hiện **bỏ bridge + UQ hồi cứu có future labels** theo yêu cầu. BO đã hoàn
+tất 104 lượt; `outputs/bo_gam_full/` chạy winner trên cùng test và quy ước để
+so với bộ paper. Không gọi WIS/coverage của nhánh full này là real-time.
+
 ## Experiment 0 — đối chiếu paper
 
 [Experiment 0](experiments/reproduction/README.md) và
@@ -28,7 +35,7 @@ Không dùng điểm đó để khẳng định đã khớp paper.
 | Dữ liệu đánh giá mặc định | Đủ 50 bang trong `outputs/truth_states/manifest.csv`; tất cả origins đủ điều kiện từ 2020-08-15 |
 | Smoothing | Gaussian thin plate regression spline, rank round(n/2), GCV như mô hình mgcv nguồn |
 | UQ | Online negative binomial, 5.000 draws; 23 quantiles cho 11 mức coverage |
-| Evaluation | Raw COVID truth, MAE/WIS, persistence baseline, biểu đồ dự báo/thực tế từng bang |
+| Evaluation | Raw COVID truth, MAE/WIS của sMOA, biểu đồ dự báo/thực tế và prediction intervals từng bang |
 
 18.387 là giá trị hard-coded trong `run_smoa.R` sau BO của tác giả. BO Python
 được chạy lại trên miền gốc và có thể chọn số curves khác: prediction dùng
@@ -104,12 +111,13 @@ README gốc phân biệt ba nguồn dữ liệu:
 | Nguồn | Mục đích | Trạng thái local |
 | --- | --- | --- |
 | `state_truths/*.RData` | Final COVID truth của từng bang | Đã chuyển bằng Python sang `outputs/truth_states/`, có provenance/checksums |
-| `tdat_list_tot_weekly.csv` (~5,5 GB theo nguồn) | Archive truth theo từng thời điểm công bố | Đã tải phần Figure 2: 4 bang × 4 vintage; chưa có archive full |
+| `tdat_list_tot_weekly.csv` (~5,5 GB theo nguồn) | Archive truth theo từng thời điểm công bố | Đã dựng lại từ JHU 50 bang × 112 vintage hàng tuần cho test chung tại `outputs/paper_weekly_archive/`; giữ cache Figure 2 riêng. Không phải tải toàn bộ file gốc 5,5 GB |
 | `scores_tot_w_wis_components.csv` (~100 MB theo nguồn) | Điểm của external models | Đã lấy forecast baseline/ensemble cho Figure 2 và chấm targets chung; chưa có score archive toàn bộ models |
 
-Chạy hiện tại dùng **COVID thật**, nhưng khi manifest không chứa `as_of_truth`,
-history là final truth. Full ngân sách tính toán không tự khắc phục archive
-lịch sử còn thiếu. Smoother mới dùng cùng thin plate/GCV, nhưng chưa xác minh numerical parity với mgcv; RNG/ODE/GP vẫn khác số học với R.
+Run `paper_full` dùng **historical snapshots** cho mọi tuần của test chung.
+Các lệnh khác dùng manifest không chứa `as_of_truth` vẫn lấy final truth làm
+history. Smoother dùng cùng thin plate/GCV, nhưng chưa xác minh numerical parity
+với mgcv; RNG/ODE/GP vẫn khác số học với R.
 [Audit](REPRODUCTION_AUDIT.md) ghi phạm vi và khác biệt còn lại;
 `publication_reproduction_complete` chưa được đặt thành true.
 
@@ -120,11 +128,32 @@ Giao diện chạy và xem kết quả bằng notebook:
 [evaluation.ipynb](experiments/forecasting/evaluation.ipynb).
 Chọn kernel `.venv`; cell cấu hình mặc định đọc job full hiện tại.
 
+Chạy và lưu một notebook bằng cùng môi trường Python:
+
+```bash
+.venv/bin/python experiments/notebooks.py experiments/comparison/experiment_1.ipynb
+```
+
+Các notebook dùng chung runner này; không có script executor riêng cho từng thư mục.
+
 - [Synthetic generation](experiments/synthetic/README.md).
 - [Bayesian optimization](experiments/optimization/README.md).
 - [UQ, prediction, evaluation và plots](experiments/forecasting/README.md).
 - [Benchmark 50 bang](experiments/forecasting/README.md#benchmark-50-bang).
 - [Dataset exploration](experiments/exploration/README.md).
+- [Experiment 1: so sánh các mô hình theo độ dài history](experiments/comparison/README.md)
+  (nhóm chính hoàn tất 464.800 forecasts: early-stage và fixed-origin history control; Holt/ARIMA chưa chạy do thiếu statsmodels).
+- [Experiment 2: parameter sensitivity và interactions](experiments/sensitivity/README.md):
+  N/k/m, nested libraries, ba training seeds, factorial 2³, accuracy–stability–runtime.
+- [Experiment 3: synthetic library characteristics](experiments/library_characteristics/README.md):
+  từng họ so với mixed, ba seeds và controls đồng nhất số curves/số matching windows.
+- [Experiment 4: sai số theo điều kiện dịch](experiments/error_analysis/README.md):
+  snapshot đúng origin, 50 bang × 50 origins, bộ paper N=18.387/k=5/m=4.422,
+  MAE/RMSE/bias/extreme errors và biểu đồ chẩn đoán.
+- [Experiment 5: analogue quality và forecast accuracy](experiments/analogue_quality/README.md):
+  matching distances, Spearman, good-match failures và held-out risk diagnostics.
+- [Experiment 6: probabilistic forecast evaluation](experiments/probabilistic/README.md):
+  coverage/MPIW/WIS theo horizon, history và điều kiện dịch; chẩn đoán UQ negative binomial gốc.
 
 ```bash
 .venv/bin/python -m unittest discover -s experiments/synthetic -v

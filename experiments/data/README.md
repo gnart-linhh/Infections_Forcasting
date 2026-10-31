@@ -6,6 +6,7 @@ chuẩn bị và không gọi lại chúng ở mỗi lần dự báo.
 | Script | Đầu vào → đầu ra |
 | --- | --- |
 | `fetch_paper_data.py` | Tải snapshot JHU theo commit covidData và forecast COVIDHub thật → CSV, raw cache, provenance (không clone, không R) |
+| `prepare_weekly_archive.py` | Dựng đủ 50 bang × 112 snapshot hàng tuần cho test chung full, dùng raw cache và tải bổ sung; xuất manifest as_of, source URLs/checksums và checkpoint |
 | `prepare_state_truth.py` | State truth `.RData` → CSV từng bang, manifest và provenance; đọc bằng Python/`pyreadr`, không chạy R |
 | `prepare_asof.py` | Archive `tdat_list_tot_weekly.csv` → snapshot CSV từng bang bằng streaming |
 | `prepare_reference_scores.py` | Original model scores và location table → canonical scores cho paired comparison |
@@ -41,3 +42,9 @@ trong provenance. Các forecast không tồn tại trong archive được ghi 40
 
 Đây là phần dữ liệu cho Figure 2, chưa phải archive đầy đủ mọi bang/vintage
 5,5 GB hay score archive toàn bộ models; các adapter vẫn phục vụ trường hợp đó.
+
+Archive cho run full mới nằm tại `outputs/paper_weekly_archive/`: 112 weekly
+origins từ 15/08/2020 đến 01/10/2022 cho 50 bang, đủ bốn future targets tới
+29/10/2022. Có snapshot cho **mọi tuần** trong cửa sổ chung, không subsample
+và không lấy final truth thay snapshot thiếu. Không đưa những tuần chỉ Arizona
+có truth sau giai đoạn chung vào test này. Xem [full protocol](../reproduction/FULL.md).

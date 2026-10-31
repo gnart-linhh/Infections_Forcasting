@@ -152,11 +152,11 @@ def run_early(full_run, manifest_path, data, out):
                     target=origin+timedelta(days=7*j)
                     point=next(r for r in output if r['horizon']==j and r['field']=='forecast')
                     row=dict(series=state,forecast_origin=str(origin),forecast_date=str(origin+timedelta(days=2)),
-                        target_end_date=str(target),horizon=j,forecast=point['point'],baseline=float(history[-1]))
+                        target_end_date=str(target),horizon=j,forecast=point['point'])
                     predictions.append(row)
                     current.append(dict(**row,true_value=float(labels.loc[pd.Timestamp(target)])))
                     for result in [r for r in output if r['horizon']==j]:
-                        model='smoa' if result['field']=='forecast' else 'persistence'
+                        model='smoa'
                         quantiles.extend(dict(**{k:row[k] for k in ['series','forecast_origin','target_end_date','horizon']},
                             model=model,quantile=float(q),value=float(v)) for q,v in zip(probabilities,result['quantiles']))
                         calibration.append(dict(series=state,forecast_origin=str(origin),horizon=j,model=model,
@@ -214,11 +214,11 @@ def score_comparison(manifest_path,data,out):
         pred=pd.read_csv(out/'early/selected'/state/'predictions.csv')
         qs=pd.read_csv(out/'early/selected'/state/'quantiles.csv')
         for row in pred.itertuples():
-            for model in ['smoa','persistence','smoa_matured_uq']:
+            for model in ['smoa','smoa_matured_uq']:
                 q=qs.loc[(qs.forecast_origin==row.forecast_origin)&(qs.horizon==row.horizon)&(qs.model==model)]
                 lookup={round(float(p),6):float(v) for p,v in zip(q['quantile'],q.value)}
                 score(state,row.forecast_origin,row.target_end_date,row.horizon,model,
-                      row.baseline if model=='persistence' else row.forecast,lookup)
+                      row.forecast,lookup)
     hub=pd.read_csv(data/'hub_forecasts.csv')
     for (state,origin,target,horizon,model),group in hub.groupby(['series','forecast_origin','target_end_date','horizon','model']):
         truth=pd.read_csv(manifest_path.parent/manifest.loc[state,'truth']).set_index('target_end_date').value

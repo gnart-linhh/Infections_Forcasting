@@ -15,6 +15,7 @@ from bayes import NAMES, minimize_objective
 from objective import ROOT, SyntheticObjective, generate_bank, embeddings, evaluate, save_library
 from bank import write_audit
 from runtime import atomic_json, file_hash, acquire_run_lock
+from compare_paper import COMPARISON_PROTOCOL, run_comparison
 
 PAPER = dict(bounds=[[10000, 30000], [2, 7], [1000, 6000]], initial_points=99, iterations=5, max_origins=0)
 
@@ -45,6 +46,8 @@ def main():
     parser.add_argument('--validation-curves-per-family', type=int, default=3, help='Only used for fixed validation')
     parser.add_argument('--smoothing', choices=['gam', 'spline', 'none'], default='gam')
     parser.add_argument('--seed', type=int, default=13)
+    parser.add_argument('--compare-paper', action='store_true',
+                        help='After selection, compare winner and published params on one fresh paired GAM test')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'outputs/reproduction_full/02_optimization')
     args = parser.parse_args()
     bounds = [args.num_curves_range or PAPER['bounds'][0], args.k_range or PAPER['bounds'][1],
@@ -56,11 +59,13 @@ def main():
         parser.error('Invalid seed, workers, origins or test/validation counts')
     if any(lo < 1 or hi <= lo for lo, hi in bounds) or initial < 2 or iterations < 0:
         parser.error('Positive nonconstant bounds, >=2 initial points, >=0 iterations required')
+    if args.compare_paper and (args.smoothing != 'gam' or args.embedding_mode != 'upstream'):
+        parser.error('--compare-paper requires --smoothing gam and --embedding-mode upstream')
     full_budget = bounds == PAPER['bounds'] and initial == 99 and iterations == 5 and max_origins == 0
     source_paths = [Path(__file__), Path(__file__).with_name('bayes.py'), Path(__file__).with_name('objective.py'),
                     ROOT / 'experiments/runtime.py', ROOT / 'experiments/synthetic/generator.py',
                     ROOT / 'experiments/synthetic/bank.py', ROOT / 'experiments/forecasting/neighbors.py',
-                    ROOT / 'experiments/forecasting/smoothing.py']
+                    ROOT / 'experiments/forecasting/smoothing.py', Path(__file__).with_name('compare_paper.py')]
     config = dict(profile='paper' if full_budget else 'custom', full_search_budget=full_budget,
         bounds=dict(zip(NAMES, bounds)), initial_points=initial, iterations=iterations,
         max_origins_per_curve=max_origins, test_curves_per_family=args.test_curves_per_family,
@@ -71,6 +76,7 @@ def main():
         train_validation_protocol='Independent resampling per trial; floor(num_curves/1000) validation attempts/family; shuffle then cap at 50'
             if args.validation_protocol=='resampled' else 'Fixed validation and nested common-seed training banks; fixed origin grid',
         heldout_protocol='Independent role 2 generated only after selecting the best observed validation score',
+        paper_comparison=dict(COMPARISON_PROTOCOL) if args.compare_paper else None,
         source_sha256={str(p.relative_to(ROOT)): file_hash(p) for p in source_paths})
     out = args.output_dir
     if out.exists() and any(out.iterdir()) and not args.resume:
@@ -89,6 +95,7 @@ def main():
         for name, expected in metadata['artifacts_sha256'].items():
             if file_hash(out / name) != expected: parser.error(f'Completed artifact modified: {name}')
         print('BO already complete and verified.', flush=True)
+        run_lock.close()
         return
     if not (out / 'run_info.json').exists():
         atomic_json(out / 'run_info.json', dict(started_utc=datetime.now(timezone.utc).isoformat(), started_epoch=time.time()))
@@ -144,12 +151,29 @@ def main():
     audit_summaries = [json.loads(path.read_text()) for path in sorted((out / 'audit').glob('trial_*_summary.json'))]
     audit_summaries.append(dict(role=2, attempted=len(test_audit), accepted=sum(r['accepted'] for r in test_audit), audit='audit/heldout.jsonl.gz'))
     atomic_json(out / 'generation_audit.json', audit_summaries)
+    del x, y
+    if args.compare_paper:
+        print('BO selection complete. Running fresh paired synthetic test versus published parameters...', flush=True)
+        try:
+            comparison = run_comparison(out/'paper_comparison', best, objective.best_bank, objective.best_audit,
+                args.seed, best_trial['trial'] if args.validation_protocol=='resampled' else 0,
+                workers=args.workers, mode=args.embedding_mode, smoothing=args.smoothing,
+                progress=lambda phase,**details: objective.progress(best_trial['trial'], 'paper_comparison_'+phase, **details))
+        except BaseException as exc:
+            atomic_json(out/'metadata.json', dict(status='interrupted' if isinstance(exc,KeyboardInterrupt) else 'failed',
+                phase='paper_comparison', error=str(exc), completed_trials=len(history)))
+            atomic_json(out/'progress.json', dict(status='failed',phase='paper_comparison',
+                error=str(exc),completed_trials=len(history),total_trials=initial+iterations))
+            raise
+        summary['paper_comparison'] = comparison
+        atomic_json(out/'summary.json', summary)
     metadata = dict(status='complete', full_search_budget=full_budget, workers=args.workers,
-        artifacts_sha256={name: file_hash(out / name) for name in ['best_params.json', 'best_library/curves.csv']},
+        artifacts_sha256={name: file_hash(out / name) for name in ['best_params.json', 'best_library/curves.csv']+
+                          (['paper_comparison/summary.json','paper_comparison/metadata.json'] if args.compare_paper else [])},
         elapsed_seconds=time.time()-json.loads((out/'run_info.json').read_text())['started_epoch'],
         python=platform.python_version(), numpy=np.__version__, scipy=scipy.__version__, source_sha256=config['source_sha256'],
         upstream=dict(repository='https://github.com/lanl/precog/tree/main/smoa', revision='aba1948d228e5380d72907048236601874b53cac'),
-        limitations=['Python RNG, SciPy LSODA/spline/GP differ numerically from R',
+        limitations=['Python RNG, SciPy LSODA/GAM optimizer/GP differ numerically from R',
             'Resampled validation changes the holdout samples across trials' if args.validation_protocol=='resampled' else 'Fixed validation differs from upstream',
             'Best observed configuration is retained; finite-budget BO does not prove a global optimum',
             'Initial LHS objective evaluations run sequentially; curve generation uses independent processes'])
@@ -158,6 +182,7 @@ def main():
     # Only transient caches are removed; selected bank, detailed audit and RNG checkpoint remain.
     shutil.rmtree(out / 'working', ignore_errors=True)
     print(json.dumps(summary, indent=2), flush=True)
+    run_lock.close()
 
 
 if __name__ == '__main__':

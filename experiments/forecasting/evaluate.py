@@ -30,7 +30,7 @@ def evaluate_outputs(directory,truth_path,output_dir,*,create_plots=True):
     rows=[];coverage=[]
     for r in predictions:
         if r['target_end_date'] not in truth: raise ValueError('Missing scoring truth')
-        for model,field in [('smoa','forecast'),('persistence','baseline')]:
+        for model,field in [('smoa','forecast')]:
             row={k:r[k] for k in KEYS};row.update(model=model,forecast=float(r[field]),true_value=truth[r['target_end_date']])
             row['abs_error']=abs(row['forecast']-row['true_value'])
             qs=quantiles.get(tuple(r[k] for k in KEYS)+(model,))
@@ -53,16 +53,16 @@ def evaluate_outputs(directory,truth_path,output_dir,*,create_plots=True):
     metrics=['abs_error']+(['wis','sharpness','overprediction','underprediction','coverage_50','coverage_80','coverage_95'] if quantiles else [])
     summary=dict(scoring_truth='raw final truth',forecasts_per_model=len(predictions),
         models={model:{metric:float(np.mean([r[metric] for r in rows if r['model']==model]))
-            for metric in metrics} for model in ['smoa','persistence']})
+            for metric in metrics} for model in ['smoa']})
     summary['coverage_by_level']={model:{str(level):float(np.mean([r['covered'] for r in coverage if r['model']==model and r['level']==level]))
-        for level in sorted({r['level'] for r in coverage})} for model in ['smoa','persistence']}
+        for level in sorted({r['level'] for r in coverage})} for model in ['smoa']}
     # Keep abs_error for existing consumers; mae makes the aggregate meaning explicit.
     for model in summary['models']:
         summary['models'][model]['mae']=summary['models'][model]['abs_error']
     summary['by_horizon']={}
     for horizon in sorted({int(r['horizon']) for r in rows}):
         summary['by_horizon'][str(horizon)]={}
-        for model in ['smoa','persistence']:
+        for model in ['smoa']:
             selected=[r for r in rows if int(r['horizon'])==horizon and r['model']==model]
             metrics=dict(n=len(selected),mae=float(np.mean([r['abs_error'] for r in selected])))
             if quantiles: metrics['wis']=float(np.mean([r['wis'] for r in selected]))
@@ -103,7 +103,7 @@ def evaluate_benchmark(directory,manifest_path,output_dir,*,create_plots=True):
                     writer.writerows(reader)
     total=sum(row['summary']['forecasts_per_model'] for row in results)
     models={model:{metric:float(sum(row['summary']['models'][model][metric]*row['summary']['forecasts_per_model']
-        for row in results)/total) for metric in results[0]['summary']['models'][model]} for model in ['smoa','persistence']}
+        for row in results)/total) for metric in results[0]['summary']['models'][model]} for model in ['smoa']}
     summary=dict(scoring_truth='raw final truth',series=len(results),forecasts_per_model=total,models=models,by_horizon={})
     horizons=sorted({h for row in results for h in row['summary']['by_horizon']},key=int)
     for h in horizons:
@@ -135,7 +135,7 @@ def evaluate_benchmark(directory,manifest_path,output_dir,*,create_plots=True):
     with (output_dir/'series_metrics.csv').open('w',newline='') as handle:
         writer=csv.DictWriter(handle,fieldnames=list(table[0]),lineterminator='\n');writer.writeheader();writer.writerows(table)
     lines.extend(['', 'Dùng raw final truth để chấm điểm. Protocol history/calibration và ngân sách BO được ghi trong báo cáo từng bang.',
-                  'Các điểm số này chỉ được tạo khi BO và prediction tương ứng đã chạy xong.', ''])
+                  'Các điểm số này được tính từ predictions và quantiles đã lưu. Nguồn tham số được ghi trong cấu hình run.', ''])
     (output_dir/'report.md').write_text('\n'.join(lines),encoding='utf-8')
     summary['artifacts']=['report.md','scores.csv','coverage.csv','series_metrics.csv',
         *[f"{result['output_subdir']}/report.md" for result in results]]

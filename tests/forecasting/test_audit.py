@@ -65,7 +65,7 @@ class ReproductionAuditTests(unittest.TestCase):
             result=run_experiment(args)
             with (root/'prediction/forecasts.csv').open() as f: rows=list(csv.DictReader(f))
             self.assertEqual([float(r['true_value']) for r in rows],[0,-3])
-            self.assertEqual([float(r['baseline_abs_error']) for r in rows],[1,4])
+            self.assertTrue(all('baseline_abs_error' not in r for r in rows))
             evaluation=evaluate_outputs(root/'prediction',truth,root/'evaluation',create_plots=False)
             self.assertEqual(evaluation['models']['smoa']['abs_error'],result['overall']['mae'])
             self.assertEqual(evaluation['models']['smoa']['wis'],result['overall']['wis'])
@@ -86,7 +86,7 @@ class ReproductionAuditTests(unittest.TestCase):
                 'A,2020-01-11,2020-01-25,2,40,0\n')
             result=evaluate_outputs(pred,truth,root/'evaluation')
             self.assertEqual(result['models']['smoa']['mae'],56.5)
-            self.assertEqual(result['models']['persistence']['mae'],101.5)
+            self.assertEqual(set(result['models']),{'smoa'})
             self.assertEqual(result['by_horizon']['1']['smoa']['mae'],21.5)
             self.assertEqual(result['by_horizon']['2']['smoa']['mae'],91.5)
             self.assertNotIn('wis',result['models']['smoa'])
@@ -129,7 +129,7 @@ class ReproductionAuditTests(unittest.TestCase):
             self.assertAlmostEqual(result['models']['smoa']['wis'],14/3)
             self.assertEqual(result['by_horizon']['1']['smoa']['n'],3)
             with (root/'evaluation/scores.csv').open() as handle:
-                self.assertEqual(len(list(csv.DictReader(handle))),6)
+                self.assertEqual(len(list(csv.DictReader(handle))),3)
             self.assertTrue((root/'evaluation/02/report.md').is_file())
 
     def test_selection_rejects_modified_library(self):

@@ -14,23 +14,13 @@ from runtime import acquire_run_lock,atomic_json,file_hash
 
 
 def aggregate(rows):
-    """Report micro averages and equally weighted series ratios separately."""
+    """Pool sMOA metrics in proportion to the number of scored origins."""
     if not rows or len({r['series'] for r in rows}) != len(rows):
         raise ValueError('Need one unique summary per series')
     weights = np.asarray([r['origins'] for r in rows])
     metrics = rows[0]['overall']
     pooled = {m: float(np.average([r['overall'][m] for r in rows], weights=weights)) for m in metrics}
-    macro = {}
-    for metric in ['mae', 'wis']:
-        if metric not in metrics:
-            continue
-        eligible = [r for r in rows if r['overall']['baseline_'+metric] > 0]
-        ratios = [r['overall'][metric]/r['overall']['baseline_'+metric] for r in eligible]
-        macro[metric] = dict(mean_series_ratio=float(np.mean(ratios)) if ratios else None,
-            median_series_ratio=float(np.median(ratios)) if ratios else None,
-            series_better_than_baseline=sum(r < 1 for r in ratios),
-            eligible_series=len(eligible), excluded_zero_baseline=len(rows)-len(eligible))
-    return dict(series=len(rows), scored_origins=int(weights.sum()), pooled=pooled, relative=macro)
+    return dict(series=len(rows), scored_origins=int(weights.sum()), pooled=pooled)
 
 
 def main():
@@ -39,6 +29,7 @@ def main():
     p.add_argument('--manifest', type=Path, required=True, help='CSV: series,truth,as_of_truth; relative paths resolve beside manifest')
     p.add_argument('--history-mode', choices=['final', 'as_of'], default='final')
     p.add_argument('--resume',action='store_true',help='Continue a run with the same inputs, parameters and code')
+    p.add_argument('--embedding-cache',type=Path,help='Exact full embeddings on disk, including curve/window audit lookup')
     a = p.parse_args()
     if a.truth or a.as_of_truth:
         p.error('Supply truth paths through manifest, not --truth or --as-of-truth')
@@ -66,15 +57,23 @@ def main():
     config={k:str(v) if isinstance(v,Path) or hasattr(v,'isoformat') else v for k,v in vars(a).items() if k!='resume'}
     config['input_hashes']={str(path):file_hash(path) for path in [a.synthetic,a.manifest]+[
         entry[field] for entry in entries for field in ['truth','as_of_truth'] if entry[field]]}
-    config['source_hashes']={name:file_hash(Path(__file__).with_name(name)) for name in
-        ['run_benchmark.py','run_backtest.py','model.py','smoothing.py','neighbors.py','prediction.py','snapshots.py','uncertainty.py']}
+    source_names=['run_benchmark.py','run_backtest.py','model.py','smoothing.py','neighbors.py','prediction.py','snapshots.py','uncertainty.py']
+    if a.embedding_cache: source_names.append('embedding_cache.py')
+    config['source_hashes']={name:file_hash(Path(__file__).with_name(name)) for name in source_names}
     if (a.output_dir/'run_config.json').exists():
         if json.loads((a.output_dir/'run_config.json').read_text())!=config: p.error('Resume config/input/source differs')
     else: atomic_json(a.output_dir/'run_config.json',config)
     if (a.output_dir/'metadata.json').exists() and (a.output_dir/'summary.json').exists():
         print('Benchmark already complete and verified.',flush=True)
         return
-    embeddings = load_library(a.synthetic, a.k, a.h)
+    if a.embedding_cache:
+        from embedding_cache import load_cached_library
+        embeddings=load_cached_library(a.synthetic,a.embedding_cache,a.k,a.h,a.bridge_mode)
+    else:
+        embeddings = load_library(a.synthetic,a.k,a.h+int(a.bridge_mode=='omit'))
+        if a.bridge_mode=='omit':
+            x,y,ids,steps=embeddings
+            embeddings=(x,y[:,1:],ids,steps)
     neighbor_index=ExactNeighbors(embeddings[0])
     summaries, state_rows, horizon_rows = [], [], []
     output = a.output_dir
@@ -92,10 +91,6 @@ def main():
         row = dict(series=summary['series'], origins=summary['origins'], warmup_origins=summary['warmup_origins'],
                    history_mode=summary['history_mode'], scored_start=summary['scored_start'],
                    scored_end=summary['scored_end'], output_subdir=f'{i:02d}', **metrics)
-        for metric in ['mae', 'wis']:
-            if metric in metrics:
-                denominator = metrics['baseline_'+metric]
-                row[metric+'_ratio'] = metrics[metric]/denominator if denominator > 0 else ''
         state_rows.append(row)
         horizon_rows.extend(dict(series=summary['series'], horizon=int(h), **stats)
                             for h, stats in summary['by_horizon'].items())
@@ -119,7 +114,7 @@ def main():
                        for name in ['run_benchmark.py','run_backtest.py','model.py','smoothing.py','snapshots.py','uncertainty.py']},
         status='complete', notes=['Per-series outputs include input checksums and environment versions',
                                   'Same synthetic library and hyperparameters across series; no tuning on scores',
-                                  'Relative ratios use persistence+NB, not COVIDHub ensemble'])
+                                  'Only sMOA is generated and evaluated'])
     (output/'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
     print(json.dumps(report, indent=2))
 

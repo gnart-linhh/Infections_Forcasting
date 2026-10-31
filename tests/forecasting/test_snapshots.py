@@ -77,21 +77,19 @@ class SnapshotTests(unittest.TestCase):
                     self.assertEqual(len(list(csv.DictReader(f))),24)
             self.assertEqual(quantiles[0],quantiles[1])
             self.assertNotEqual(forecasts[0][0]['wis'],forecasts[1][0]['wis'])
-            self.assertEqual(forecasts[0][0]['baseline'],str(float(1000+8*20+8)))
+            self.assertNotIn('baseline',forecasts[0][0])
 
 
 class AggregationTests(unittest.TestCase):
-    def test_micro_weighting_and_macro_ratios_are_distinct(self):
-        result = aggregate([dict(series='A',origins=10,overall=dict(mae=2.,baseline_mae=4.)),
-                            dict(series='B',origins=1,overall=dict(mae=10.,baseline_mae=5.))])
+    def test_pooling_weights_the_number_of_origins(self):
+        result = aggregate([dict(series='A',origins=10,overall=dict(mae=2.)),
+                            dict(series='B',origins=1,overall=dict(mae=10.))])
         self.assertAlmostEqual(result['pooled']['mae'],30/11)
-        self.assertEqual(result['relative']['mae']['mean_series_ratio'],1.25)
-        self.assertEqual(result['relative']['mae']['series_better_than_baseline'],1)
+        self.assertNotIn('relative',result)
 
-    def test_zero_baseline_and_duplicate_series(self):
-        row = dict(series='A',origins=1,overall=dict(mae=1.,baseline_mae=0.))
-        self.assertEqual(aggregate([row])['relative']['mae']['excluded_zero_baseline'],1)
-        self.assertIsNone(aggregate([row])['relative']['mae']['mean_series_ratio'])
+    def test_single_series_and_duplicate_series(self):
+        row = dict(series='A',origins=1,overall=dict(mae=1.))
+        self.assertEqual(aggregate([row])['pooled']['mae'],1)
         with self.assertRaises(ValueError):
             aggregate([row,row])
 

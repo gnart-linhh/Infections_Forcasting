@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import csv
+import gzip
 from datetime import date, timedelta
 import hashlib
 import json
@@ -46,6 +47,10 @@ def parser(truth_required=True):
     p.add_argument('--warmup-start-date', type=date.fromisoformat, help='Earlier origins used for calibration only')
     p.add_argument('--score-truth', choices=['raw','floored'], default='raw', help='Raw matches source; floored reproduces older project scores')
     p.add_argument('--calibration-truth', choices=['history','final'], default='history')
+    p.add_argument('--uq-policy',choices=['matured','figure2_retrospective'],default='matured',
+                   help='Retrospective uses final outcomes of earlier issued forecasts, including unmatured targets')
+    p.add_argument('--bridge-mode',choices=['keep','omit'],default='keep',
+                   help='Omit uses diff(future levels), requiring one additional future level per synthetic window')
     p.add_argument('--prehistory-mode', choices=['rolling','frozen'], default='rolling')
     p.add_argument('--frozen-as-of-date', type=date.fromisoformat, default=date(2020,8,15))
     p.add_argument('--coverage-grid', choices=['full','standard'], default='full')
@@ -60,6 +65,7 @@ def parser(truth_required=True):
     p.add_argument('--smoothing', choices=['gam', 'spline', 'none'], default='gam')
     p.add_argument('--probabilistic', action='store_true', help='Online NB intervals and WIS, horizons up to 4')
     p.add_argument('--interval-draws', type=int, default=5000)
+    p.add_argument('--compress-matches',action='store_true',help='Lossless gzip for the full neighbor audit')
     p.add_argument('--seed', type=int, default=13)
     p.add_argument('--output-dir', type=Path, default=ROOT/'outputs/forecasting')
     return p
@@ -74,7 +80,15 @@ def run_experiment(a, embeddings=None, neighbor_index=None):
         p.error('Probabilistic mode requires h <= 4, positive draws and nonnegative seed')
     if a.warmup_start_date and a.warmup_start_date > a.start_date:
         p.error('warmup-start-date must be <= start-date')
-    x, y, curve_ids, steps = embeddings if embeddings is not None else load_library(a.synthetic, a.k, a.h)
+    if a.uq_policy=='figure2_retrospective' and a.calibration_truth!='final':
+        p.error('Retrospective UQ requires --calibration-truth final so unmatured outcomes are available')
+    if embeddings is None:
+        x,y,curve_ids,steps=load_library(a.synthetic,a.k,a.h+int(a.bridge_mode=='omit'))
+        if a.bridge_mode=='omit': y=y[:,1:]
+    else:
+        x,y,curve_ids,steps=embeddings
+    if x.shape[1]!=a.k or y.shape[1]!=a.h:
+        p.error('Embedding dimensions differ from the requested k/h')
     neighbor_index=neighbor_index if neighbor_index is not None else ExactNeighbors(x)
     if a.end_date and a.end_date < a.start_date:
         p.error('end-date must be >= start-date')
@@ -101,15 +115,22 @@ def run_experiment(a, embeddings=None, neighbor_index=None):
     if a.output_dir.exists() and any(a.output_dir.iterdir()):
         p.error('Output directory must be empty')
     a.output_dir.mkdir(parents=True, exist_ok=True)
-    records, matches, quantile_rows, issued = [], [], [], []
+    records, quantile_rows, issued = [], [], []
     coverage_table, calibration_table, predictions = [], [], []
+    match_fields=['forecast_origin','rank','curve_id','window_start','distance']
+    match_path=a.output_dir/('matches.csv.gz' if a.compress_matches else 'matches.csv')
+    def match_handle(mode):
+        return (gzip.open(match_path,mode+'t',newline='',compresslevel=1) if a.compress_matches else
+                match_path.open(mode,newline=''))
+    with match_handle('w') as handle:
+        csv.DictWriter(handle,fieldnames=match_fields).writeheader()
     for i in warmup + origins:
         history = (frozen_history[:i+1] if frozen_history is not None and i in warmup and i<=frozen_index else
                    snapshots.history(dates[i], dates[:i+1]) if snapshots else np.maximum(truth[:i+1],1))
         vintage=(a.frozen_as_of_date if frozen_history is not None and i in warmup and i<=frozen_index else dates[i])
         observed=snapshots.raw_values(vintage,dates[:i+1]) if snapshots else truth[:i+1]
         prior = (issued if a.calibration_truth=='final' else calibration_rows(issued, dates[i], dates[:i+1], observed))
-        plan = calibration_plan(prior,dates[i].isoformat(),a.h) if a.probabilistic and i in origins else None
+        plan = calibration_plan(prior,dates[i].isoformat(),a.h,policy=a.uq_policy) if a.probabilistic and i in origins else None
         output,indices,distances,probabilities = predict_origin(history,x,y,dates[i],plan,a.closest,a.smoothing,
             a.seed,a.interval_draws,a.coverage_grid=='full',clip_smoothed=not(i in warmup and a.prehistory_mode=='frozen'),
             neighbor_index=neighbor_index)
@@ -117,22 +138,23 @@ def run_experiment(a, embeddings=None, neighbor_index=None):
         for j in range(1,a.h+1):
             per_horizon=[r for r in output if r['horizon']==j]
             row=dict(series=a.series,forecast_origin=dates[i].isoformat(),target_end_date=dates[i+j].isoformat(),
-                horizon=j,forecast=per_horizon[0]['point'],baseline=per_horizon[1]['point'],true_value=float(truth[i+j]))
+                horizon=j,forecast=per_horizon[0]['point'],true_value=float(truth[i+j]))
             # Evaluation begins only after the prediction API has returned.
-            row.update(abs_error=abs(row['forecast']-row['true_value']),baseline_abs_error=abs(row['baseline']-row['true_value']))
+            row.update(abs_error=abs(row['forecast']-row['true_value']))
             if i in origins:
-                predictions.append(dict(**{key:row[key] for key in ['series','forecast_origin','target_end_date','horizon','forecast','baseline']},
+                predictions.append(dict(**{key:row[key] for key in ['series','forecast_origin','target_end_date','horizon','forecast']},
                     forecast_date=(dates[i]+timedelta(days=2)).isoformat()))
             if plan is not None:
                 for result in per_horizon:
-                    field=result['field'];prefix='' if field=='forecast' else 'baseline_'
+                    prefix=''
                     standard=np.array([result['quantiles'][np.flatnonzero(np.isclose(probabilities,q))[0]] for q in QUANTILES])
                     row.update({prefix+key:value for key,value in scores(standard,row['true_value']).items()})
                     row.update({prefix+'nb_size':result['size'],prefix+'dispersion_method':result['method'],
                                 prefix+'calibration_n':result['count'],prefix+'negative_calibration_excluded':result['excluded_negative']})
-                    model='smoa' if field=='forecast' else 'persistence'
+                    model='smoa'
                     calibration_table.append(dict(series=a.series,forecast_origin=dates[i].isoformat(),horizon=j,model=model,
-                        nb_size=result['size'],method=result['method'],calibration_n=result['count'],excluded_negative=result['excluded_negative']))
+                        nb_size=result['size'],method=result['method'],calibration_n=result['count'],excluded_negative=result['excluded_negative'],
+                        calibration_policy=result['calibration_policy'],future_calibration_n=result['future_count']))
                     quantile_rows.extend(dict(series=a.series,forecast_origin=dates[i].isoformat(),target_end_date=dates[i+j].isoformat(),
                         horizon=j,model=model,quantile=float(q),value=float(v)) for q,v in zip(probabilities,result['quantiles']))
                     coverage_table.extend(dict(series=a.series,forecast_origin=dates[i].isoformat(),target_end_date=dates[i+j].isoformat(),
@@ -142,10 +164,12 @@ def run_experiment(a, embeddings=None, neighbor_index=None):
         if i not in origins:
             continue
         records.extend(current)
-        matches.extend(dict(forecast_origin=dates[i].isoformat(), rank=rank,
-            curve_id=curve_ids[idx], window_start=int(steps[idx]), distance=float(distance))
-            for rank, (idx, distance) in enumerate(zip(indices, distances), 1))
-    tables = [('forecasts.csv', records), ('matches.csv', matches), ('predictions.csv',predictions)]
+        with match_handle('a') as handle:
+            writer=csv.DictWriter(handle,fieldnames=match_fields)
+            writer.writerows(dict(forecast_origin=dates[i].isoformat(), rank=rank,
+                curve_id=curve_ids[idx], window_start=int(steps[idx]), distance=float(distance))
+                for rank,(idx,distance) in enumerate(zip(indices,distances),1))
+    tables = [('forecasts.csv', records), ('predictions.csv',predictions)]
     if warmup:
         tables.append(('warmup_forecasts.csv', [r for r in issued if r['forecast_origin'] < a.start_date.isoformat()]))
     if a.probabilistic:
@@ -154,10 +178,9 @@ def run_experiment(a, embeddings=None, neighbor_index=None):
         with (a.output_dir/name).open('w', newline='') as handle:
             w = csv.DictWriter(handle, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
     def stats(rows):
-        result = dict(mae=float(np.mean([r['abs_error'] for r in rows])),
-                      baseline_mae=float(np.mean([r['baseline_abs_error'] for r in rows])))
+        result = dict(mae=float(np.mean([r['abs_error'] for r in rows])))
         if a.probabilistic:
-            for prefix in ['', 'baseline_']:
+            for prefix in ['']:
                 for metric in ['wis', 'coverage_50', 'coverage_80', 'coverage_95', 'width_95', 'sharpness', 'overprediction', 'underprediction']:
                     result[prefix+metric] = float(np.mean([r[prefix+metric] for r in rows]))
         return result
@@ -178,10 +201,14 @@ def run_experiment(a, embeddings=None, neighbor_index=None):
                      ('Python thin plate regression spline/GCV; mgcv optimizer and floating point may differ' if a.smoothing=='gam' else 'Legacy SciPy spline or no smoothing, differs from source GAM'),
                      'Frozen prehistory must be selected explicitly; duplicate first-origin row in upstream is not replayed',
                      'Monte Carlo quantiles use NumPy RNG, not R RNG',
-                     'Persistence NB intervals are an added diagnostic baseline'])
+                     ('Retrospective UQ uses final outcomes of earlier-issued forecasts even before targets mature; not real-time causal'
+                      if a.uq_policy=='figure2_retrospective' else 'UQ excludes targets after the current origin'),
+                     f'Embedding bridge mode: {a.bridge_mode}'])
     summary['score_truth']=a.score_truth
     summary['calibration_truth']=a.calibration_truth
     summary['coverage_grid']=a.coverage_grid
+    summary['bridge_mode']=a.bridge_mode
+    summary['uq_policy']=a.uq_policy
     for name, obj in [('summary.json', summary), ('metadata.json', metadata)]:
         (a.output_dir/name).write_text(json.dumps(obj, indent=2)+'\n')
     return summary

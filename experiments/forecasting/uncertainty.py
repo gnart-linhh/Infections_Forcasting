@@ -76,12 +76,15 @@ def scores(quantiles, actual):
 def calibration_plan(prior,origin,horizons=4,policy='matured'):
     """Default is causal. Figure 2's retrospective convention must be explicit."""
     result={}
-    for field in ['forecast','baseline']:
+    for field in ['forecast']:
         for horizon in range(1,horizons+1):
             size,method,count=dispersion(prior,origin,horizon,field,horizons,policy)
-            excluded=sum(r['horizon']==horizon and r['target_end_date']<=origin and
+            excluded=sum(r['horizon']==horizon and (policy=='figure2_retrospective' or r['target_end_date']<=origin) and
                          np.isfinite(r['true_value']) and r['true_value']<0 for r in prior)
-            result[(field,horizon)]=dict(size=size,method=method,count=count,excluded_negative=excluded)
+            future_count=sum(r['horizon']==horizon and policy=='figure2_retrospective' and r['target_end_date']>origin and
+                             np.isfinite(r['true_value']) and r['true_value']>=0 for r in prior)
+            result[(field,horizon)]=dict(size=size,method=method,count=count,excluded_negative=excluded,
+                                        calibration_policy=policy,future_count=future_count)
     return result
 
 

@@ -1,5 +1,9 @@
 # Experiment 0 — tái hiện Figure 2 bằng Python
 
+Run chính trên toàn bộ lịch tuần: xem [FULL.md](FULL.md) và
+[full.ipynb](full.ipynb). Run này dùng 50 bang × 112 origins, snapshot JHU đầy
+đủ cho test chung, paper N=18.387/k=5/m=4.422; BO hiện tại tiếp tục riêng.
+
 Mở [experiment_0.ipynb](experiment_0.ipynb), chọn kernel `.venv`, Run All.
 Notebook hiển thị hình paper, hình Python cùng bố cục và MAE/WIS thực tế.
 
@@ -62,8 +66,9 @@ Cơ sở toán của smoother: [mgcv thin plate regression splines](https://stat
 Run 50 bang/104 BO trials cũ ở `outputs/reproduction_full/` vẫn là kết quả
 **legacy final truth + spline**; không đổi nhãn nó thành kết quả historical/GAM.
 BO và forecasting mặc định mới dùng GAM; phải dùng thư mục mới khi chạy lại
-full, vì source/input checksum đã đổi. Snapshot mới hiện bao phủ 4 bang và
-4 vintage của Figure 2, chưa phải archive 5,5 GB cho mọi ngày/bang.
+full, vì source/input checksum đã đổi. Cache Figure 2 có 4 bang × 4 vintage;
+run [full mới](FULL.md) đã bổ sung snapshot 50 bang × 112 origins hàng tuần
+của test chung. Đây chưa phải toàn bộ file nguồn 5,5 GB cho mọi ngày/bang.
 Không khẳng định đã tái hiện Figure 3–5 hay tỷ lệ thắng 78%/76% các models.
 
 ```bash

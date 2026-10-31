@@ -10,13 +10,13 @@ def predict_origin(history,x,y,origin,plan,k_closest=4422,smoothing='gam',seed=1
     result=[]
     probabilities=LONG_QUANTILES if full_coverage else QUANTILES
     for horizon,value in enumerate(point,1):
-        for model_idx,field in enumerate(['forecast','baseline']):
-            prediction=float(value) if model_idx==0 else float(max(1,history[-1]))
-            row=dict(horizon=horizon,field=field,point=prediction)
-            if plan is not None:
-                fit=plan[(field,horizon)]
-                rng=np.random.default_rng(np.random.SeedSequence([seed,origin.toordinal(),horizon,model_idx]))
-                row.update(fit)
-                row['quantiles']=interval_quantiles(prediction,fit['size'],rng,draws,fit['method']=='initial',probabilities)
-            result.append(row)
+        prediction=float(value)
+        row=dict(horizon=horizon,field='forecast',point=prediction)
+        if plan is not None:
+            fit=plan[('forecast',horizon)]
+            # Keep the original sMOA RNG key when removing other model outputs.
+            rng=np.random.default_rng(np.random.SeedSequence([seed,origin.toordinal(),horizon,0]))
+            row.update(fit)
+            row['quantiles']=interval_quantiles(prediction,fit['size'],rng,draws,fit['method']=='initial',probabilities)
+        result.append(row)
     return result,indices,distances,probabilities

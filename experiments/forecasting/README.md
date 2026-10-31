@@ -160,7 +160,7 @@ case count khác để làm điểm số thay đổi âm thầm.
   `[.025,.1,.25,.5,.75,.9,.975]`, cùng helper R.
 - Coverage: full 23 quantiles `[.01,.025,.05,.10,...,.95,.975,.99]` → 11 central
   intervals: 98%,95%,90%,80%,...,10%. Điều kiện `lower < actual <= upper`.
-- Sharpness, overprediction, underprediction; persistence baseline riêng.
+- Sharpness, overprediction, underprediction của sMOA.
 - MAE/WIS theo horizon trong runner, và file score dài cho so sánh model.
 
 ### Xem biểu đồ và MAE/WIS từ lần chạy đã có
@@ -174,12 +174,12 @@ Không cần chạy lại synthetic, BO hoặc prediction. Ví dụ với Califo
   --output-dir outputs/reproduction_full/05_evaluation/05
 ```
 
-Lệnh in bảng **MAE và WIS** của sMOA/persistence ra terminal, đồng thời tạo:
+Lệnh in bảng **MAE và WIS** của sMOA ra terminal, đồng thời tạo:
 
 - `report.md`: bảng tổng hợp và theo horizon, kèm hình và protocol dữ liệu/BO.
-- `forecast_vs_actual.png` / `.svg`: COVID thực tế (đen), sMOA (xanh), persistence
-  (cam nét đứt); vùng 50%/95% là khoảng dự báo của sMOA.
-- `metrics_by_horizon.png` / `.svg`: MAE/WIS so với persistence ở từng horizon.
+- `forecast_vs_actual.png` / `.svg`: COVID thực tế (đen), sMOA (xanh);
+  vùng 50%/95% là khoảng dự báo của sMOA.
+- `metrics_by_horizon.png` / `.svg`: MAE/WIS của sMOA ở từng horizon.
 - `summary.json`: trường `mae` tường minh (`abs_error` là alias),
   `by_horizon` và danh sách artifacts.
 
@@ -227,7 +227,7 @@ fixtures kiểm tra adapter/join không được báo thành kết quả COVIDHu
 
 ## Output
 
-- `predictions.csv`: point/baseline đã phát hành, không có truth hay score.
+- `predictions.csv`: point forecast sMOA đã phát hành, không có truth hay score.
 - `quantiles.csv`: 23 quantiles/model/horizon khi chọn full grid.
 - `calibration.csv`: NB size/method/outcome count/negative exclusion theo origin.
 - `coverage.csv`: 11 mức coverage/model/horizon.
@@ -288,10 +288,9 @@ Final-truth backtest không được gọi là realtime evaluation.
 
 ### Điểm số và hình
 
-- `series_metrics.csv`: MAE/WIS/coverage, output subdir và ratio so persistence từng bang.
+- `series_metrics.csv`: MAE/WIS/coverage và output subdir từng bang.
 - `horizon_metrics.csv`: điểm theo bang/horizon.
-- `summary.json`: pooled score có trọng số theo số forecasts, mean/median ratio
-  mỗi bang có trọng số bằng nhau, số bang tốt hơn baseline.
+- `summary.json`: pooled score sMOA có trọng số theo số forecasts.
 - `01/`, `02/`, ...: issued predictions, quantiles, calibration và matches;
   ánh xạ thư mục qua `series_metrics.csv`.
 
@@ -302,8 +301,7 @@ Bước 5 của `experiments/run_pipeline.py` gọi `evaluate_benchmark`, tạo
 
 Chấm raw truth, giữ cả zero/negative revisions. Chỉ floor history ở 1 và loại
 negative outcomes khỏi NB likelihood với số lượng ghi rõ. WIS dùng 7 quantiles
-theo helper nguồn; full coverage dùng 23 quantiles. Persistence là diagnostic
-baseline; external COVIDHub models cần score archive thật và paired comparator.
+theo helper nguồn; full coverage dùng 23 quantiles. External COVIDHub models cần score archive thật và paired comparator.
 
 Job full **legacy final truth + spline** đã hoàn tất 104/104 BO evaluations và 50 bang: 22.468
 forecasts/model, MAE 7.564,27 và WIS 4.765,92. Coverage 95% = 86,78%; chưa tái
