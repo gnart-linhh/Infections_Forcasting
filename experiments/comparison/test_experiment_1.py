@@ -1,5 +1,6 @@
 """Science checks for limited-history fitting, common masks and bank-loss aggregation."""
 from pathlib import Path
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -50,6 +51,67 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(e1.synthetic_eligibility(SyntheticCurve(values,'seasonal','weekly','proportion',True))[0],'proportion')
         self.assertEqual(e1.synthetic_eligibility(SyntheticCurve(values[:20],'seasonal','weekly','counts',True))[0],'insufficient_followup')
         self.assertGreater(e1.RNG_ROOT,2000000+3*e1.N)
+
+    def test_synthetic_zero_counts_allowed_and_raw_history_preserved(self):
+        values=np.r_[np.zeros(3),10.,np.zeros(35)]
+        c=SyntheticCurve(values,'seasonal','weekly','counts',True)
+        self.assertEqual(e1.synthetic_eligibility(c),('eligible',3))
+        negative=values.copy();negative[-1]=-1
+        self.assertEqual(e1.synthetic_eligibility(SyntheticCurve(negative,'seasonal','weekly','counts',True))[0],'invalid_values')
+        self.assertEqual(e1.synthetic_eligibility(SyntheticCurve(np.zeros(35),'seasonal','weekly','counts',True))[0],'no_onset')
+        raw=np.array([10.,0.,0.,0.,0.,0.]);case=e1.make_case(0,'synthetic','B','z','seasonal',0,'24',23,6,'1',24,'19',raw)
+        np.testing.assert_array_equal(e1.unpack(case[13]),raw)
+        self.assertEqual(case[14],e1.digest_array(np.maximum(raw,1)))
+
+    def test_three_bank_embedding_audits_detect_wrong_future_alignment(self):
+        hashes=[]
+        with tempfile.TemporaryDirectory() as temp:
+            for seed in e1.SEEDS:
+                path=Path(temp)/str(seed)
+                curves=[SyntheticCurve(np.zeros(20),'seasonal','weekly','counts',True),
+                        SyntheticCurve((np.arange(22.)+seed)**2,'seasonal','weekly','counts',True)]
+                x,y,codes=e1.embed(curves,[1,2],e1.K,path,h=e1.H)
+                audit=e1.embedding_audit(curves,[1,2],x,y,codes,path)
+                self.assertEqual(audit['verified_rows'],12)
+                self.assertEqual(audit['rules']['window_filter'],'nonconstant_v2')
+                self.assertFalse(np.all(x==0,axis=1).any());self.assertTrue(np.all(codes==2))
+                hashes.append(audit['rules_sha256'])
+                bad=y.copy();bad[0,0]+=1
+                with self.assertRaisesRegex(ValueError,'Embedding audit failed'):
+                    e1.embedding_audit(curves,[1,2],x,bad,codes,path)
+                del x,y,codes
+        self.assertEqual(len(set(hashes)),1)
+
+    def test_zero_selection_counterfactual_counts_discarded_valid_curve(self):
+        with tempfile.TemporaryDirectory() as temp:
+            db=e1.connect(Path(temp));e1.initialize(db)
+            info=json.dumps(dict(zero_values=1,floor_values=1,legacy_nonpositive_rejected=True))
+            db.execute('INSERT INTO test_audit VALUES (?,?,?,?,?,?,?,?)',(0,0,0,'[]','eligible',1,'hash',info))
+            audit=e1.selection_audit(db)
+            self.assertEqual(audit['otherwise_eligible_zero_curves'],1)
+            self.assertEqual(audit['selected_ids_changed_vs_legacy_zero_gate'],1)
+            db.close()
+
+    @unittest.skipUnless(e1.importlib.util.find_spec('statsmodels') is not None,'statsmodels optional')
+    def test_secondary_fits_finite_with_unused_holt_parameters(self):
+        for model in e1.SECONDARY:
+            for n in [16,24]:
+                p,info=e1.fit_secondary(model,11*np.arange(1.,n+1)+10*np.sin(np.arange(n)))
+                self.assertEqual(len(p),4);self.assertTrue(np.isfinite(p).all())
+                json.dumps(info,allow_nan=False)
+                if model=='Holt':self.assertEqual(len(info['parameters']),4)
+
+    def test_secondary_gap_change_matches_units_and_averages_bank_losses(self):
+        rows=[]
+        for state in ['a','b']:
+            for T in [16,24]:
+                for model,seeds,value in [('sMOA',[0,1,2],13 if T==16 else 12),('Holt',[-1],11),('ARIMA',[-1],12 if T==16 else 13)]:
+                    for seed in seeds:
+                        rows.append(dict(domain='real',series=state,origin='2021-01-02',cluster=state,T=T,
+                            case_id=state+str(T),horizon=1,model=model,bank_seed=seed,prediction=value,actual=10.))
+        result=e1.secondary_history_changes(pd.DataFrame(rows)).set_index('baseline')
+        self.assertEqual(result.loc['Holt','delta_MAE'],-1)
+        self.assertEqual(result.loc['ARIMA','delta_MAE'],-2)
 
     def test_case_has_exact_history_and_core_GAM_query(self):
         raw=np.array([0.,3.,8.,12.,9.,14.])

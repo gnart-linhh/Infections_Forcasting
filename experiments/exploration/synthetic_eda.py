@@ -1,10 +1,14 @@
 """Stream every synthetic curve and measure morphology without mixing units."""
 import csv
 from itertools import groupby
+from pathlib import Path
+import sys
 import numpy as np
 import pandas as pd
 from scipy.ndimage import median_filter
 from scipy.signal import find_peaks
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'forecasting'))
+from model import WINDOW_FILTER, valid_history_windows
 
 FAMILIES=['sir_rollercoaster','sir_rollercoaster_wiggle','seasonal']
 PEAK_RULE=dict(smoothing='centered median of 3 original steps, nearest edge padding',
@@ -58,7 +62,7 @@ def scan_library(path,k=5,h=4):
                 count=0
                 if len(values)>=width:
                     windows=np.lib.stride_tricks.sliding_window_view(np.maximum(values,1e-8),width)
-                    count=int((np.var(windows[:,:k+1],axis=1,ddof=1)>0).sum())
+                    count=int(valid_history_windows(windows[:,:k+1]).sum())
                 metrics['embedding_windows_'+mode]=count
             rows.append(dict(curve_id=curve,curve_type=family,scale=scale,time_cadence=cadence,**metrics))
             key=(family,scale,cadence)

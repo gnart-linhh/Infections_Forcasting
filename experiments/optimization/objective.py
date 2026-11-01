@@ -1,6 +1,9 @@
 """Synthetic holdout MAE objective based on LANL optimize_smoa.R."""
 from __future__ import annotations
 import csv
+from concurrent.futures import ProcessPoolExecutor
+from functools import lru_cache
+import multiprocessing
 import shutil
 from pathlib import Path
 import sys
@@ -16,6 +19,7 @@ from runtime import atomic_json
 sys.path.insert(0,str(ROOT/'experiments/forecasting'))
 from neighbors import ExactNeighbors
 from smoothing import thin_plate_gcv
+from model import valid_history_windows
 
 FAMILIES=('sir_rollercoaster','sir_rollercoaster_wiggle','seasonal')
 
@@ -50,7 +54,7 @@ def embeddings(curves,k,h=4,mode='upstream'):
         width=k+1+h+(mode=='upstream')
         if len(values)<width: continue
         windows=np.lib.stride_tricks.sliding_window_view(values,width) # Tạo cửa sổ trượt
-        windows=windows[np.var(windows[:,:k+1],axis=1,ddof=1)>0] # Lọc các cửa sổ có phương sai bằng 0
+        windows=windows[valid_history_windows(windows[:,:k+1])]
         xs.append(np.diff(windows[:,:k+1],axis=1)) # Sai phân đầu vào
         # optimize_smoa.R uses diff(y), skipping the X-to-y bridge. Preserve this
         # difference from run_smoa.R unless the pipeline objective is requested.
@@ -67,27 +71,44 @@ def origin_indices(length,k,h,max_origins,min_history=None):
         indices=indices[np.linspace(0,len(indices)-1,max_origins,dtype=int)]
     return indices
 
-# Dự báo trên validation và tính MAE
+def _curve_queries(task):
+    curve_id,curve,k,h,max_origins,smoothing,min_history=task
+    queries=[];contexts=[]
+    # Only a small validation curve goes to workers, never training embeddings.
+    # Worker-local basis caches survive across BO trials via the persistent pool.
+    # Upstream validation adds 100 to the entire synthetic holdout series.
+    values=np.asarray(curve.ts,float)+100
+    # Tạo các origin cho mỗi đường cong
+    for n in origin_indices(len(values),k,h,max_origins,min_history):
+        history=values[:n]
+        if smoothing=='gam' and n>=3:
+            smooth=thin_plate_gcv(history)
+        elif smoothing=='spline' and n>=5:
+            t=np.arange(n,dtype=float)
+            smooth=make_smoothing_spline(t,history)(t)
+        elif smoothing=='none' or n<5:
+            smooth=history
+        else: raise ValueError('Unknown smoother')
+        queries.append(np.diff(smooth[-k-1:]))
+        contexts.append((curve_id,curve.curve_type,int(n),history[-1],values[n:n+h]))
+    return queries,contexts
+
+
+@lru_cache(maxsize=1)
+def _query_pool(workers):
+    return ProcessPoolExecutor(max_workers=workers,mp_context=multiprocessing.get_context('spawn'))
+
+
 def evaluate(curves,x,y,k,closest,max_origins=0,smoothing='gam',cap_curves=50,min_history=None,
-             workers=1,on_progress=None):
+             workers=1,on_progress=None,on_preprocess=None):
     records=[];queries=[];contexts=[]
     if closest>len(x): raise ValueError('closest exceeds available embedding rows')
-    for curve_id,curve in enumerate(curves[:cap_curves]):
-        # Upstream validation adds 100 to the entire synthetic holdout series.
-        values=np.asarray(curve.ts,float)+100
-        # Tạo các origin cho mỗi đường cong
-        for n in origin_indices(len(values),k,y.shape[1],max_origins,min_history):
-            history=values[:n]
-            if smoothing=='gam' and n>=3:
-                smooth=thin_plate_gcv(history)
-            elif smoothing=='spline' and n>=5:
-                t=np.arange(n,dtype=float)
-                smooth=make_smoothing_spline(t,history)(t)
-            elif smoothing=='none' or n<5:
-                smooth=history
-            else: raise ValueError('Unknown smoother')
-            queries.append(np.diff(smooth[-k-1:]))
-            contexts.append((curve_id,curve.curve_type,int(n),history[-1],values[n:n+y.shape[1]]))
+    tasks=[(i,c,k,y.shape[1],max_origins,smoothing,min_history) for i,c in enumerate(curves[:cap_curves])]
+    prepared=(_query_pool(workers).map(_curve_queries,tasks,chunksize=1)
+              if workers>1 and smoothing=='gam' else map(_curve_queries,tasks))
+    for done,(curve_queries,curve_contexts) in enumerate(prepared,1):
+        queries.extend(curve_queries);contexts.extend(curve_contexts)
+        if on_preprocess:on_preprocess(done,len(tasks))
     index=ExactNeighbors(x,workers)
     for start in range(0,len(queries),32):
         neighbors,_=index.query(queries[start:start+32],closest)
@@ -161,7 +182,8 @@ class SyntheticObjective:
         self.progress(trial,'validation',embedding_rows=len(x),validation_curves=len(validation))
         score,records=evaluate(validation,x,y,params['k'],params['closest'],self.max_origins,self.smoothing,
             min_history=self.min_history,workers=self.workers,
-            on_progress=lambda done,total:self.progress(trial,'validation',scored_origins=done,total_origins=total))
+            on_progress=lambda done,total:self.progress(trial,'validation',scored_origins=done,total_origins=total),
+            on_preprocess=lambda done,total:self.progress(trial,'gam_preprocessing',completed_curves=done,total_curves=total))
         if self.work_dir is None:
             self.audit.extend(dict(entry,evaluation_trial=trial) for entry in train_audit+validation_audit)
         if score<self.best_score:

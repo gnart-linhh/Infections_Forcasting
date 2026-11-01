@@ -1,13 +1,13 @@
 # Experiment 4 — Forecast Error Analysis Across Epidemic Conditions
 
+Bản hiện hành dùng **E2 v4 / `nonconstant_v2`**, output riêng
+`outputs/experiment_4_nonconstant_v2/`. Kết quả v1 được lưu nguyên ở
+[report cũ](../../outputs/experiment_4_omit/report.md).
+
 Phân tích **sMOA Python dùng bộ paper `N=18.387, k=5, m=4.422`**; không dùng
 winner BO. Thực nghiệm tập trung rút ra insights về hành vi sai số
 của sMOA theo điều kiện dịch. Đây là thực nghiệm bổ sung, không phải hình đã
 xuất bản trong paper.
-
-**Đã chạy xong full**: xem [kết quả và nhận xét](#results). sMOA có MAE
-5.310,91, RMSE 20.620,47 trên 10.000 targets, bridge=omit; báo cáo phân tích sai số theo
-phase, mức ca, volatility, horizon và số tuần history.
 
 ## Thiết kế cố định trước khi chấm điểm
 
@@ -50,7 +50,7 @@ không phải tuyên bố rằng paper đã dùng các nhóm này.
 Output:
 
 ```text
-outputs/experiment_4_omit/
+outputs/experiment_4_nonconstant_v2/
   protocol.json, progress.json, run.lock
   instances.csv             lỗi và đặc trưng từng target, đủ để audit nhóm
   case_status.csv           mọi case, kể cả lỗi; runtime mỗi forecast case
@@ -95,36 +95,30 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
 ```
 
 [Notebook xem kết quả](experiment_4.ipynb) đọc progress, tables và các hình.
-Lệnh tái chạy run cũ nằm trong `outputs/experiment_4/launch.json`; bản mới chạy theo lệnh trên,
-source snapshot đã kiểm tra nằm ở `outputs/experiment_4_omit/source_snapshot/`.
-Chỉ báo hoàn tất khi `progress.json` có `status=complete`; không coi log launch
-là kết quả đã chạy xong. Không chạy lại BO.
+Runner yêu cầu E2 v4 đã complete tại `outputs/experiment_2_nonconstant_v2/`.
+Trước khi đánh dấu complete, runner kiểm tra SHA numerical core, packed bank,
+context và group artifacts; tự tính lại 10.000 forecasts rồi đối chiếu **chính xác**
+point forecasts, actuals và toàn bộ target keys với seed 0 của E2 v4.
+Notebook xác minh thêm protocol, filter, input/source/artifact hashes và cache;
+trạng thái `complete` đơn lẻ không đủ để hiển thị kết quả.
 
 Embedding toàn bộ synthetic library đọc streaming và dùng memmap trên đĩa,
 giữ đúng thứ tự/window/median của `forecasting/model.py`, không giảm số curves
 hoặc approximate nearest neighbors. Mặc định **bridge=omit**, đồng nhất nhánh
 `full`: embed thêm một future difference rồi bỏ difference nối history/future.
-`--bridge-mode keep --output-dir outputs/experiment_4_keep_new` chạy đối chứng
-trong thư mục riêng. UQ không ảnh hưởng point predictions và không chạy ở đây. Cache cần khoảng 1 GB; setup/index được
+UQ không ảnh hưởng point predictions và không chạy ở đây. Cache cần khoảng 1 GB; setup/index được
 tách khỏi runtime forecast. Synthetic library thực tế có 55.161 attempts,
 54.081 curves được chấp nhận; không sinh bù 1.080 seasonal attempts bị loại.
 Python RNG/GAM vẫn có khác biệt so với R/mgcv được ghi trong report.
 
 `prepare_panel.py --offline` chỉ tạo panel các vintage đã cache; runner từ chối
-panel thiếu trừ khi ghi rõ `--allow-incomplete`. Không dùng chế độ đó để công bố
-đã hoàn tất thiết kế 50 origins.
+panel thiếu. Nhánh đồng bộ E2 yêu cầu đủ 50 bang và 50 origins, bridge=omit.
 
-## Audit với full và cách đọc hình
+## Đối chiếu và cách đọc hình
 
-```bash
-.venv/bin/python experiments/error_analysis/audit.py
-```
-
-Kết quả cũ **keep** giữ nguyên tại `outputs/experiment_4`; kết quả mới **omit**
-tại `outputs/experiment_4_omit`. Cùng 10.000 targets, library, GAM, N/k/m và labels;
-không thay đổi lịch hay ngưỡng nhóm để cải thiện điểm. Trên 6.200 targets chung,
-old keep = full keep; new omit = full omit, point-by-point, max difference 0.
-126.450 historical values chung cũng khớp. Audit gồm CSV đối chiếu và hashes.
+Đối chiếu E2 nằm trong `progress.json:e2_parity`; không tái dùng audit 6.200
+shared targets của các full runs cũ để xác nhận bộ mới. Không đổi lịch,
+ngưỡng nhóm, bootstrap hoặc matching để cải thiện điểm.
 
 - `forecast_overview`: CA/TX/NY/FL cố định, toàn bộ scheduled origins, horizon 1/4.
 - `error_quantile_trajectories`: percentiles 10/50/90/99 của mean normalized error
@@ -138,114 +132,17 @@ Không so pooled MAE giữa hai tập origins khác nhau để kết luận mode
 
 <a id="results"></a>
 
-## Kết quả và audit hiện hành
+## Kết quả hiện hành
 
-Bản hiện tại dùng **N=18.387/family, k=5, m=4.422, GAM/GCV, bridge=omit**,
-50 bang × 50 origins × 4 horizons = **10.000 targets**, không có fit lỗi.
-Output: `outputs/experiment_4_omit/`; notebook
-[experiment_4.ipynb](experiment_4.ipynb). Bản keep cũ giữ nguyên tại
-`outputs/experiment_4/`, gồm protocol, source snapshot, predictions và report.
+Đọc [report mới](../../outputs/experiment_4_nonconstant_v2/report.md) và notebook;
+chỉ sử dụng số liệu sau khi kiểm tra provenance thành công.
 
-### Vì sao hình prediction trông sai nhiều?
+Lượt chạy mới đã **complete**: 2.500/2.500 cases hợp lệ, 0 fit lỗi,
+10.000/10.000 point forecasts và actuals khớp chính xác E2 v4 seed 0;
+max point difference = 0. Cache có 12.921.078 windows, zero constant histories.
 
-**Hình cũ `extreme_trajectories` chọn đúng bốn cases có normalized error lớn
-nhất trong 2.500 cases**, mỗi case bốn horizons. Đó là hình failure analysis,
-không phải một mẫu đại diện. Caption cũ chưa làm rõ mức độ chọn lọc này.
+MAE **5,310.91**, RMSE **20,620.47**, normalized MAE **0.7413**, bias **-1,122.47**; extreme rate **17.53%**.
 
-Có một khác biệt cấu hình thật: Experiment 4 cũ giữ bridge difference, trong
-khi nhánh `full` hiện bỏ bridge. Đã thêm lựa chọn bridge rõ vào protocol, đổi
-mặc định thành omit và chạy lại trên đúng cùng 10.000 targets. Không đổi
-N/k/m, history, labels, schedule, smoothing hoặc ngưỡng chia nhóm.
-
-### Kiểm tra đối chiếu trực tiếp
-
-| Đối chiếu trên cùng state/origin/target | Targets | Point khác nhau | Label khác nhau | Max point difference |
-| --- | ---: | ---: | ---: | ---: |
-| Experiment 4 cũ keep vs full cũ keep | 6.200 | 0 | 0 | 0 |
-| Experiment 4 mới omit vs full hiện tại omit | 6.200 | 0 | 0 | 0 |
-
-31 origins chung ×50 bang ×4 horizons. Toàn bộ 126.450 giá trị history chung
-cũng khớp. Kiểm tra target_end_date = origin +7×horizon, tính lại absolute errors
-và giữ nguyên labels đều pass. Chưa thấy lỗi lệch một tuần, ghép nhầm bang,
-hoặc dùng một bộ prediction khác trong Experiment 4.
-
-Trên cùng 6.200 targets, MAE keep là 7.552,67, omit là 7.400,52. Vì tập test
-Experiment 4 và full khác calendar, pooled MAE của cả hai không thể so trực tiếp.
-Khác policy UQ không làm thay đổi point forecasts; Experiment 4 chỉ chấm điểm
-point, không tính intervals/WIS.
-
-Audit có thể chạy lại bằng `python experiments/error_analysis/audit.py`;
-chi tiết ở `outputs/experiment_4_omit/audit/{comparison.json,bridge_comparison.csv,provenance.json}`.
-
-### Kết quả trên toàn bộ cùng 10.000 targets
-
-| Phiên bản | MAE | RMSE | Mean normalized absolute error | Extreme rate (>1) |
-| --- | ---: | ---: | ---: | ---: |
-| Cũ, bridge keep | 5.479,11 | 20.722,37 | 0,756 | 18,12% |
-| Mới, bridge omit | 5.310,91 | 20.620,47 | 0,741 | 17,53% |
-
-MAE giảm khoảng 3,07%; không phải mọi case đều tốt hơn. Median normalized
-absolute error bản omit là 0,294, trong khi mean là 0,741: một số sai số lớn
-kéo mean lên. Chỉ số này chia cho mean 4 tuần history tại origin (floor 1),
-không phải percentage error chia cho actual tương lai.
-
-| Horizon | MAE omit | Extreme rate |
-| --- | ---: | ---: |
-| 1 tuần | 2.986,59 | 7,00% |
-| 2 tuần | 4.953,46 | 15,28% |
-| 3 tuần | 6.439,19 | 21,68% |
-| 4 tuần | 6.864,39 | 26,16% |
-
-Horizon 4 có MAE khoảng 2,30 lần horizon 1. Các hình chỉ xem horizon ngắn hoặc
-origins ít biến động có thể trông tốt hơn hình chọn ca sai nhất ở cả bốn horizons.
-
-### Failure modes thực sự vẫn còn
-
-- **Florida, origin 2021-11-27:** as-of history cuối là 0 (final tuần đó cũng 0),
-  sau tuần trước 9.891. Cả keep và omit dự báo 1 ở cả bốn horizons. Actual các
-  tuần sau là 19.555, 12.984, 28.841, 124.865. Model floor history ở 1, lấy mức
-  cuối làm base và không nhận diện lịch reporting. Đây là hạn chế có thật,
-  không phải lỗi vẽ hoặc chắc chắn do revision. Không tự impute zero để sửa điểm.
-- **Alabama, origin 2021-12-25:** omit dự báo horizon 4 là 17.465,5, actual
-  132.765. Tăng trưởng tương lai vượt xa analog forecast.
-- **West Virginia, origin 2020-04-04:** omit horizon 4 là 1.652, actual 175.
-  History ngắn/tăng nhanh dẫn đến tiếp tục tăng trong khi actual giảm.
-
-Đó là những ca quan sát hậu nghiệm, không chứng minh mọi outbreak đều thất bại.
-Raw point forecasts dùng cùng core Python với full, exact L1 neighbors và
-synthetic library hash `374329bac3b4bbc28cfc04b6e5f7ff2edcefe9a56979c45b6344dc5ff1c9d9ff`.
-
-### Insights cập nhật, bản omit
-
-| Phase tại origin | Targets | MAE | Normalized MAE | Bias | Extreme rate |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Rising | 4.520 | 7.268,40 | 1,048 | −655,71 | 27,26% |
-| Stable | 1.860 | 4.373,59 | 0,556 | −1.159,65 | 11,72% |
-| Declining | 3.620 | 3.348,35 | 0,453 | −1.686,16 | 8,37% |
-
-Rising khó hơn stable ở cả hai thang. Bias rising đã đổi dấu sau khi bỏ bridge;
-nhận xét bias dương của bản keep không áp dụng cho bản mới. Rising có 44,78%
-instances underprediction: mean bias âm không có nghĩa đa số cases dự báo thấp.
-Volatility cao: normalized MAE 1,208/extreme rate 30,40%; thấp: 0,403/8,26%.
-
-Early (≤26 tuần history) có normalized MAE 0,991/extreme rate 26,03%; later
-0,624/13,53%. Case-count low có normalized MAE 1,355 trong khi raw MAE chỉ
-453,41. Các nhóm tương quan với phase, quy mô bang và calendar; không suy ra
-hiệu ứng nhân quả của history hoặc volatility từ bảng mô tả này.
-
-### Hình đã bổ sung
-
-Giữ riêng hình extreme và ghi rõ selection ngay trên hình. Bổ sung:
-
-- `forecast_overview`: bốn bang cố định CA/TX/NY/FL, tất cả origins, horizon 1/4,
-  vẽ predictions tại target dates và đối chiếu final weekly series.
-- `error_quantile_trajectories`: các examples ở percentile 10/50/90/99 của mean
-  normalized error qua bốn horizons mỗi case. Đây cũng là post-hoc selection,
-  nhưng cho thấy nhiều mức lỗi; không gọi chúng là random/representative sample.
-- Với các trajectories, vẽ cả final history và as-of history để thấy data revisions.
-  Chỉ as-of history được dùng cho dự báo.
-
-Có 8 nhóm hình PNG/SVG. Tám tests pass, gồm bridge indexing, embedding/forecast
-parity, origin-only features, thresholds, error metrics và quantile selection.
-Python RNG/GAM chưa được chứng minh numerical parity với R/mgcv; không điều chỉnh
-thuật toán theo các errors vừa xem để ép kết quả gần actual.
+Đã đối chiếu trực tiếp với output omit v1: cả 10.000 points không đổi.
+Các chỉ số trùng là kết quả được tính lại, không lấy từ báo cáo cũ.
+Các ngưỡng, bootstrap và quy tắc phân nhóm giữ nguyên. Notebook đã chạy đủ 6 code cells.

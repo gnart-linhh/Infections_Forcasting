@@ -1,5 +1,6 @@
 """Check origin-only features, normalization, sMOA diagnostics and embedding parity."""
 import csv
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -15,9 +16,30 @@ from library import embeddings
 from model import load_library, forecast
 from neighbors import ExactNeighbors
 from prepare_panel import calendar
+from audit import compare_reference,e2_reference,validate_cache,validate_result
 
 
 class ConditionsTests(unittest.TestCase):
+    def test_reference_requires_exact_values_and_complete_target_keys(self):
+        data=pd.DataFrame([dict(series='A',forecast_origin='2020-04-04',target_end_date='2020-04-11',
+                                horizon=1,prediction=2.,actual=3.)])
+        self.assertEqual(compare_reference(data,data,1)['equal_predictions'],1)
+        for changed in [data.assign(prediction=np.nextafter(2.,3.)),data.assign(actual=4.),
+                        data.assign(series='B'),data.iloc[:0]]:
+            with self.assertRaises(ValueError):compare_reference(data,changed,1)
+
+    def test_stale_complete_runs_and_constant_cache_are_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            for name,value in [('protocol',{'design':{'version':3}}),('validation',{}),('progress',{'status':'complete'})]:
+                (root/f'{name}.json').write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValueError,'E2 v4'):e2_reference(root)
+            with self.assertRaisesRegex(ValueError,'stale protocol'):validate_result(root,4)
+            (root/'metadata.json').write_text(json.dumps(dict(version=2,window_filter='nonconstant_v2')))
+            # Constant increments are a valid trend; only zero increments imply flat levels.
+            self.assertEqual(validate_cache(root,np.ones((1,5)),{'M':1})['constant_history_rows'],0)
+            with self.assertRaisesRegex(ValueError,'Constant history'):validate_cache(root,np.zeros((1,5)),{'M':1})
+
     def test_origin_features_cannot_see_future(self):
         history=np.array([10,11,12,13,15,15,30,30],dtype=float)
         data=np.r_[history,[5000,0,99999]]
@@ -64,6 +86,8 @@ class ConditionsTests(unittest.TestCase):
                     writer.writerows((curve,i,v) for i,v in enumerate(values,1))
             expected_x,expected_y,_,_=load_library(path,5,4)
             x,y=embeddings(path,Path(tmp)/'cache')
+            self.assertEqual(len(x),14)
+            self.assertFalse(np.all(x==0,axis=1).any())
             np.testing.assert_array_equal(x,expected_x)
             np.testing.assert_array_equal(y,expected_y)
             first=forecast([2,3,4,10,8,9,11,15],expected_x,expected_y,closest=7)

@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from runtime import file_hash
+from model import WINDOW_FILTER
 
 
 def apply_selection(args):
@@ -23,6 +24,9 @@ def apply_selection(args):
         if file_hash(directory/relative)!=expected[relative]:
             raise ValueError(f'Modified selection artifact: {relative}')
     protocol=json.loads((directory/'config.json').read_text())
+    if protocol.get('window_filter') != WINDOW_FILTER:
+        raise ValueError('BO used a different/legacy window filter. Rerun optimization in a fresh directory; '
+                         'old winners remain historical results, not selections for nonconstant_v2.')
     selected_smoother=protocol.get('smoothing')
     if selected_smoother and getattr(args,'smoothing',None)!=selected_smoother:
         raise ValueError(f'BO used {selected_smoother}, prediction requests {args.smoothing}. '

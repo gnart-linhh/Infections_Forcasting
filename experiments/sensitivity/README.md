@@ -1,5 +1,18 @@
 # Experiment 2 — Sensitivity, Interactions and Computational Trade-offs
 
+Lượt hiện hành: **protocol v4 / nonconstant_v2**, output
+`outputs/experiment_2_nonconstant_v2/`. Giữ nguyên 23 cấu hình ×3 seeds ×10.000
+targets = **690.000 forecasts**, kể cả N=22.000 và N=30.000. Results v1 chỉ
+được lưu để đối chiếu ở `outputs/experiment_2/`, không nhập lại forecasts.
+[Notebook](experiment_2.ipynb) và [report mới](../../outputs/experiment_2_nonconstant_v2/report.md)
+chỉ đọc output mới sau validation. Chưa công bố ranking v2 khi chưa complete.
+
+Các packed banks và extensions cũ được kiểm tra hashes, budget, seed và mọi
+prefix curve/ID rồi link sang output mới; không sinh CSV/bank trùng. Các links
+phụ thuộc dữ liệu gốc nên không xóa packed banks nguồn. Mỗi group ghi filter,
+constant rows=0, contexts/bank hashes và numerical source; analysis/notebook
+kiểm tra lại. Thay k vẫn đồng thời thay M và geometry, chưa có equal-M control.
+
 Thực nghiệm Python cho sMOA theo thiết kế E2.A/B/C. Reference:
 **(N,k,m)=(18387,5,4422)**, GAM/GCV, exact L1 neighbors, **omit bridge**, h=4.
 N là **số attempts mỗi family**, không phải số accepted curves hay valid segments M.
@@ -114,39 +127,27 @@ Hai bank seed 1/2 được sinh đồng thời, seed0 replay chạy riêng; các
 phản ánh system load thực tế khác nhau, không dùng để xếp hạng thuật toán giữa seeds.
 
 K thay đổi M: báo cả N và M; equal-M ablation là tùy chọn chưa thực hiện.
-Có thêm numerical validity audit: core `np.var>0` đôi khi giữ các histories
-hoàn toàn phẳng do floating-point roundoff. `segment_validity_audit.csv` đếm
-riêng số rows này theo mọi seed/N/k. Không âm thầm đổi core giữa sensitivity;
-ảnh hưởng k vì vậy bao gồm cả hành vi bộ lọc hiện tại. Strict constant-filter
-ablation là một nghiên cứu implementation riêng, chưa chạy trong E2 này.
+Numerical validity audit bắt buộc retained constant histories =0 cho mọi
+N/k/seed với nonconstant_v2. Không dùng variance floating point để giữ nhầm
+flat rows. Thứ hạng k=5/k=7 và các kết luận v1 phải được tính lại; không điều
+chỉnh filter hoặc các mức tham số để giữ thứ hạng cũ.
 
 ## Chạy và tiếp tục
 
-**Với output hiện có:** dùng `experiments/sensitivity/extend_n.py` (lệnh ở cuối)
-để bổ sung hoặc kiểm tra/resume mức N mới nhất. Protocol cũ được giữ nguyên; không
-resume bằng runner đã đổi design. Lệnh runner dưới đây dành cho chạy từ đầu
-trong một output directory mới, ví dụ thêm `--output-dir outputs/experiment_2_fresh`.
-
 ```bash
+# Fresh output; không khởi chạy trùng job đang có.
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
-  .venv/bin/python -u experiments/sensitivity/run_experiment_2.py
-```
-
-Runner tự chuẩn bị các bank thiếu. Các thư mục bank có thể được tạo trước bằng
-`experiments/synthetic/generate_python.py` với đúng offsets và N=18387. Không
-chạy hai generator đồng thời ghi cùng thư mục. Resume cùng code/input/design:
-
-```bash
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
-  .venv/bin/python -u experiments/sensitivity/run_experiment_2.py --resume
+  .venv/bin/python -u experiments/sensitivity/run_experiment_2.py \
+  --reuse-banks-from outputs/experiment_2 \
+  --output-dir outputs/experiment_2_nonconstant_v2 \
+  --notebook-path experiments/sensitivity/experiment_2.ipynb
 .venv/bin/python -m unittest discover -s experiments/sensitivity -v
-.venv/bin/python experiments/notebooks.py experiments/sensitivity/experiment_2.ipynb
 ```
 
-[experiment_2.ipynb](experiment_2.ipynb) đọc các artifacts thực tế và hình;
-không sinh lại synthetic hoặc fit lại khi mở notebook. Xem [kết quả và nhận xét](#results)
-cho nhận xét thực tế sau khi job hoàn thành. Theo dõi `outputs/experiment_2/progress.json`
-và `run.log`; nếu có lỗi xem `failure.json`. Chỉ coi complete sau khi đủ validation/report.
+Log/progress/launch.json và frozen source nằm trong output mới. Dùng đúng
+resume_command trong launch.json để giữ method/data/source identity. Notebook
+được execute tự động sau khi report/hash audit xong; nếu có lỗi, E3 đang chờ
+sẽ dừng thay vì dùng kết quả chưa kiểm chứng.
 
 ## Tổ chức
 
@@ -167,235 +168,18 @@ factorial effects, generation/runtime/matching tables, short-history availabilit
 accuracy của original study hoặc một BO mới. Python RNG/GAM vẫn có khác biệt
 so với R/mgcv; không điều chỉnh phương pháp sau khi xem test để ép kết quả tốt hơn.
 
-## Mở rộng N — dùng chung script hiện có
+## Các mức N mở rộng
 
-```bash
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
-  .venv/bin/python -u experiments/sensitivity/extend_n.py --target-n 30000
-```
-
-Chạy lại cùng lệnh để kiểm tra/resume các job chưa xong. Không dùng runner cũ
-với `--resume` để ghi đè protocol ban đầu. Fresh runner vẫn hỗ trợ đầy đủ
-23 configs /42 groups /690.000 main targets trong output directory mới.
-
-Mở rộng E2.A tại k=5/m=4422, ba seeds, cùng targets, theo chuỗi
-**18.387→22.000→30.000**. Lượt 22k thêm 3.613 attempts/family; lượt 30k chỉ
-thêm 8.000 attempts/family. SeedSequence key `[offset,2000202,family,index]`
-không phụ thuộc N đích. Không dịch scalar seeds của wiggle/seasonal khi N đổi;
-không sinh bù rejections. Prefix cũ được kiểm tra toàn bộ values/metadata/IDs
-và giữ nguyên thứ tự để tie breaking ổn định.
-
-Mỗi mức mới chỉ thêm 30.000 forecasts. Lượt 30k giữ nguyên 39 groups đã có.
-Protocol gốc và các amendment trước được giữ nguyên; `effective_protocol.json`
-trỏ tới amendment mới nhất. `extension_generation.csv` chứa cả hai lần mở rộng.
-
-Không tạo thêm script/notebook hoặc các bản sao before/render/source_snapshot
-cho mỗi lượt: bảng, hình, README, RESULTS và notebook được cập nhật tại chỗ.
-Chỉ lưu packed bank, seed audit và ba nhóm forecasts cần cho N mới.
-Code provenance được nhúng trong protocol.json thay vì nhân bản file nguồn.
-Các backup trước của lượt 22k vẫn giữ nguyên, không tạo thêm backup cho 30k.
+N22k/N30k được giữ nguyên từ yêu cầu trước, cùng prefix namespace và rejected
+attempts; không thêm mức mới hoặc thay configurations sau khi xem v2 errors.
+Các extension files cũ được dùng lại và kiểm tra giá trị/IDs của prefix đầy đủ.
 
 <a id="results"></a>
 
-## Kết quả sensitivity và interactions
+## Kết quả hiện hành
 
-**Đã chạy xong:** 23 cấu hình ×3 independent training banks ×10.000 common
-COVID targets = **690.000 point forecasts**; thêm 28.800 auxiliary targets
-cho controlled short-history availability. Notebook:
-[experiment_2.ipynb](experiment_2.ipynb); artifacts: `outputs/experiment_2/`.
-
-Reference **(N,k,m)=(18387,5,4422)**; N là attempts/family, h=4, GAM/GCV,
-exact L1, omit bridge. Cùng 50 bang ×50 origins của Experiment 4, không đổi
-calendar hoặc thresholds theo kết quả. Không chạy BO hoặc UQ trong E2.
-
-MAE/RMSE dưới đây là mean của ba seed-specific scores; SD là SD giữa ba seeds,
-không phải CI. Reference mean MAE **5.309,16**, RMSE **20.634,96**, MAE seed SD
-**2,37**. Seed 0 khớp chính xác đủ 10.000 point forecasts và labels của Experiment 4.
-
-### E2.A — Thay từng tham số
-
-Giữ k=5, m=4422 khi thay N:
-
-| N attempts/family | Mean MAE | MAE seed SD |
-| --- | ---: | ---: |
-| 500 | 5.709,83 | 17,92 |
-| 2.000 | 5.480,73 | 16,49 |
-| 5.000 | 5.392,23 | 11,95 |
-| 10.000 | 5.345,72 | 2,71 |
-| 18.387 | 5.309,16 | 2,37 |
-| 22.000 | 5.298,69 | 5,28 |
-| 30.000 | 5.280,97 | 3,03 |
-
-Tăng N cải thiện cả matching và mean accuracy trên chính panel này, với lợi
-ích giảm dần: 10.000→18.387 chỉ giảm MAE thêm 36,56 ca (khoảng 0,68%).
-Bổ sung N=22.000 theo yêu cầu sau lượt đầu, giữ k=5/m=4422 và cùng ba seeds:
-mean RMSE **20.610,46**; paired delta MAE so với N=18.387 là **−10,46 ca**
-(khoảng **−0,20%**), 95% state-cluster interval **[−17,12; −4,59]**.
-Mức tăng library từ 18.387 lên 22.000 do đó vẫn có cải thiện nhỏ trên panel
-này, không chứng minh N=22.000 tối ưu toàn cục. Seed SD tăng từ 2,37 lên 5,28;
-N lớn hơn không bảo đảm stability cải thiện đơn điệu.
-
-Bổ sung tiếp **N=30.000**, vẫn k=5/m=4422 và cùng targets: mean MAE
-**5.280,97**, mean RMSE **20.572,78**, MAE seed SD **3,03**. So với N=22.000,
-MAE giảm thêm **17,72 ca (~0,33%)**; so với reference 18.387 giảm **28,19 ca
-(~0,53%)**, paired 95% state-cluster interval **[−46,06; −10,78]**.
-Đây là kết quả trên fixed panel, không chứng minh global optimum.
-
-Trên 7.500 seed/state/origin queries, không có lần minimum L1 distance tăng
-khi mở rộng nested bank. Đây là tính chất của matching trên nested sets,
-không chứng minh accuracy luôn đơn điệu trên các test khác.
-
-Giữ N=18387, m=4422 khi thay k:
-
-| k | Mean MAE | MAE seed SD | Paired delta MAE vs k=5 | 95% state-cluster interval |
-| --- | ---: | ---: | ---: | --- |
-| 3 | 5.354,36 | 1,87 | +45,20 | [−4,44; 98,71] |
-| 5 | 5.309,16 | 2,37 | 0 | [0; 0] |
-| 7 | 5.276,19 | 3,75 | −32,97 | [−78,36; 12,58] |
-| 9 | 5.314,88 | 3,52 | +5,73 | [−48,03; 60,06] |
-
-k=7 có mean MAE thấp nhất trong đường k, nhưng paired interval vẫn chứa 0.
-Không khẳng định k=7 tốt hơn ở mọi bang hoặc là lựa chọn đã xác nhận trên
-một test độc lập. k=9 không mang thêm accuracy ở điểm trung bình đang xét.
-
-Giữ N=18387, k=5 khi thay m:
-
-| m | Mean MAE | MAE seed SD |
-| --- | ---: | ---: |
-| 100 | 5.308,98 | 10,85 |
-| 500 | 5.247,65 | 5,16 |
-| 2.000 | 5.269,58 | 3,09 |
-| 4.422 | 5.309,16 | 2,37 |
-| 8.000 | 5.347,53 | 1,14 |
-
-Tăng m làm MAE ít dao động giữa các banks hơn trong các mức này, nhưng không
-đảm bảo giảm mean MAE. m=500 giảm mean MAE khoảng 1,16% so với reference;
-paired interval của delta là [−110,20; −8,08] ca. Các intervals là mô tả trên
-fixed panel, không điều chỉnh multiple comparisons hoặc biến một best row
-hậu nghiệm thành winner được xác nhận độc lập. m=8000 ổn định hơn về MAE seed
-SD nhưng mean MAE cao hơn reference 38,37 ca. m đếm segments, không phải
-số curves độc lập; CSV còn báo số unique matched curves.
-
-### E2.B — Tương tác thật sự có ý nghĩa cho diễn giải
-
-Đủ 8 corners của N={1000,5000}, k={3,7}, m={500,2000}; thêm center=(2000,5,1000)
-và paper reference. Heatmaps chỉ hiển thị các ô thực sự chạy, cùng color scale;
-các tổ hợp chưa chạy ở hình grid tổng để xám.
-
-Một ví dụ **N × m** từ conditional differences:
-
-| k cố định | MAE change khi m 500→2000 tại N=1000 | Cùng change tại N=5000 | Difference-in-differences |
-| --- | ---: | ---: | ---: |
-| 3 | +112,42 | +18,25 | −94,18 |
-| 7 | +159,36 | +71,52 | −87,84 |
-
-Tăng m gây penalty về mean MAE nhỏ hơn khi thư viện lớn hơn trong các corners
-này. Vì vậy ảnh hưởng của m không tách rời N. Các tương tác N×k và m×k cũng
-có bảng conditional contrasts riêng trong `conditional_interactions.csv`.
-
-Coded triple interaction có mean 1,59, seed SD 10,44, không ổn định về hướng.
-Chỉ xem là exploratory với tám corners và ba seeds; không suy ra quan hệ
-ba chiều chắc chắn hoặc tác động nhân quả.
-
-Mean MAE thấp nhất trong 23 rows quan sát là **5.244,04** tại
-(N,k,m)=(5000,7,500); đây là mô tả hậu nghiệm, không phải BO winner hoặc
-khuyến nghị thay tham số production. Center có mean MAE 5.351,79.
-
-### E2.C — Runtime và stability
-
-Với N=18387, m=4422, mean warmed query benchmark qua ba seeds:
-
-| k | Query benchmark ms/case |
-| --- | ---: |
-| 3 | 1,41 |
-| 5 | 4,91 |
-| 7 | 38,65 |
-| 9 | 127,90 |
-
-k=9 tốn khoảng 26 lần query latency của k=5 trên máy/lượt chạy này, trong khi
-mean MAE không cải thiện. Đây là riêng query benchmark, không phải toàn bộ
-forecasting/training time. Lượt runner ban đầu, gồm packing, scoring 21 cấu hình và report,
-chạy khoảng **36 phút 21 giây**, chưa gồm các lượt sinh/replay libraries trước đó.
-
-Runtime CSV tách prefix loading, embedding, tree setup, shared maximum-m
-queries, aggregation và benchmark riêng từng m. Peak RSS đo trong subprocess
-riêng theo (seed,N,k); không gọi peak dùng chung này là memory riêng từng m.
-Prefix loader giải nén full largest bank trước khi chọn subset, nên peak của
-N nhỏ cũng có backing-bank overhead. Seed0 group wall times còn gồm auxiliary
-short-history analysis; không so raw job totals giữa seeds như benchmark thuần.
-Generation/export timings là observed durations của full banks; seed0 là
-fresh replay, seed1/2 được sinh đồng thời. Không bịa standalone generation
-time cho các N nhỏ vốn được lấy từ nested prefixes.
-
-Stability có cả MAE SD và per-target prediction SD/range; ba seeds còn ít để
-đánh giá tails. Main errors theo từng horizon có trong `scores_by_horizon.csv`.
-
-### Short-history availability
-
-Giữ N=18387, m=4422, seed0; first 16 genuine panel origins ×50 bang. Chỉ cho
-model thấy last L quan sát tại chính vintage đó, không giả snapshot có sớm hơn.
-
-- L=4: mọi k đều unavailable vì GAM core cần ít nhất 5 observations.
-- L=6: k=3/5 fit được; k=7/9 không đủ history.
-- L=8: thêm k=7.
-- L=10: cả bốn k fit được.
-
-Có 28.800 forecast targets hợp lệ và 5.600 case/config combinations được ghi
-`insufficient_history`. Không tạo dự báo giả để lấp các ô. Chỉ so các k trong
-cùng L và cùng cases; không gộp auxiliary scores vào main 690.000 targets.
-
-### Numerical validity audit — giới hạn quan trọng khi đọc k
-
-Core hiện dùng `np.var(history, ddof=1)>0` sau floor 1e-8. Floating-point
-roundoff có thể làm variance rất nhỏ dương trên history hoàn toàn phẳng.
-Seed0 reference k=5 giữ **2.047.853 rows phẳng /14.968.931 core rows =13,68%**;
-audit full-N seed0 cho k=3/7/9 không thấy rows phẳng được giữ như vậy.
-
-E2 **giữ nguyên core** để so đúng các run trước và ghi rõ hiện tượng trong
-`segment_validity_audit.csv`/hình riêng. Vì vậy k sensitivity hiện gồm cả
-hành vi numerical validity filter, không chỉ hiệu quả window length. Chưa
-chạy strict constant-filter ablation hoặc equal-M control; không coi các
-k comparisons là đã cô lập hoàn toàn hiệu ứng riêng của window length.
-
-### Kiểm chứng và artifacts
-
-- 10 tests pass: design/OFAT/factorial, nested attempts, exact neighbor prefixes,
-  bridge omission/core forecast parity, paired labels, interaction scaling,
-  m≤M và numerical validity audit.
-- 23 configs ×3 seeds, đủ 690.000 main targets; reference seed0 khớp Experiment 4.
-- Minimum M của toàn bộ jobs là 401.711; mọi requested m được kiểm tra theo M
-  của chính job. Nested minimum-distance violations và median-distance decrease
-  khi tăng m đều bằng 0.
-- Ba banks giữ 54.081 /54.006 /54.042 curves từ cùng 55.161 attempts/bank.
-  Full seed0 replay CSV SHA256 khớp bitwise thư viện Python reference.
-- 11 nhóm hình PNG/SVG; notebook đã thực thi. Inputs/code/artifact checksums,
-  source snapshot, group completion hashes, report metadata và validation JSON
-  lưu trong output. Python RNG/GAM chưa được chứng minh numerical parity với R.
-
-### Bổ sung N=22.000/30.000 và bảo toàn kết quả cũ
-
-Điểm N=22.000 là amendment sau nghiên cứu ban đầu theo yêu cầu người dùng,
-không ghi lại thành mức đã chọn trước khi xem kết quả. Lượt bổ sung chạy
-khoảng 4 phút 4 giây, gồm sinh thêm, ba seed forecasts và cập nhật report.
-
-Giữ nguyên 18.387 attempts/family cũ, thêm 3.613 attempts/family/seed bằng
-SeedSequence namespace riêng; không chạy generator với scalar-seed stride mới
-vì cách đó sẽ thay wiggle/seasonal ban đầu. Các banks 22k giữ
-64.709 /64.643 /64.675 curves hợp lệ từ 66.000 attempts/bank. Từng curve value,
-metadata, ID và thứ tự prefix cũ được kiểm tra toàn bộ, không chỉ lấy sample.
-
-Chỉ chạy thêm 30.000 targets; 36 groups cũ và mọi giá trị của 21 summary rows
-cũ giữ nguyên. Protocol gốc không bị ghi đè. `effective_protocol.json` nối
-protocol gốc với `amendments/N22000/protocol.json`; bảng/hình/notebook trước
-mở rộng giữ ở `amendments/N22000/before/`. Generation costs của phần thêm
-được ghi riêng trong `extension_generation.csv`.
-
-Lượt N=30.000 nối trực tiếp từ các banks 22k, chỉ thêm 8.000 attempts/family/seed;
-không sinh lại phần cũ. Ba banks giữ 88.197 /88.175 /88.178 curves hợp lệ từ
-90.000 attempts/bank. Chỉ chạy thêm 30.000 targets, giữ nguyên hashes của
-39 groups trước đó. Tổng hiện tại: 23 cấu hình, 3 seeds, 690.000 main forecasts.
-
-Dùng lại `extend_n.py`, notebook và mọi bảng/hình hiện có; không tạo thêm
-script, notebook, bản sao toàn bộ báo cáo hoặc source snapshot cho lượt 30k.
-Chỉ lưu dữ liệu/kết quả cần thiết; code provenance nhúng trong protocol.json.
-Lệnh chạy/resume: `python experiments/sensitivity/extend_n.py --target-n 30000`.
+Đọc `outputs/experiment_2_nonconstant_v2/progress.json`; chỉ kết luận khi
+status=complete, notebook_status=complete, validation ghi đúng nonconstant_v2,
+constant_history_rows=0 và đủ 690.000 targets. Các bảng/hình/notebook sẽ được
+sinh từ chính run này. Report v1 vẫn nằm ở `outputs/experiment_2/report.md`;
+không dùng MAE hoặc ranking cũ như kết luận của bộ lọc mới.

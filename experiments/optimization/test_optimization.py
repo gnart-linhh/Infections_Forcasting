@@ -76,6 +76,21 @@ class BayesianTests(unittest.TestCase):
 
 
 class ObjectiveTests(unittest.TestCase):
+    def test_parallel_gam_preprocessing_preserves_all_records_and_score(self):
+        curves=[curve([2,4,3,9,14,5,7,12,19,11]),curve([3,8,6,4,16,12,20,13,8,21])]
+        x=np.array([[1.,2.],[2.,1.],[-2.,1.],[0.,3.]])
+        y=np.array([[1.,3.],[-1.,4.],[3.,-2.],[0.,2.]])
+        serial=evaluate(curves,x,y,2,2,smoothing='gam',workers=1)
+        parallel=evaluate(curves,x,y,2,2,smoothing='gam',workers=2)
+        self.assertEqual(serial,parallel)
+
+    def test_constant_history_filter_matches_both_forecast_branches(self):
+        values=[curve([0]*20),curve(np.arange(20,dtype=float))]
+        for mode,expected_rows in [('upstream',10),('pipeline',11)]:
+            x,y=embeddings(values,5,4,mode)
+            self.assertEqual(len(x),expected_rows)
+            self.assertFalse(np.all(x==0,axis=1).any())
+
     def test_upstream_diff_y_omits_bridge(self):
         values=[curve([1,3,6,10,15,21])]
         x,y=embeddings(values,2,2,'upstream')

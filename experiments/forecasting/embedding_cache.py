@@ -12,6 +12,7 @@ sys.path.insert(0,str(ROOT))
 sys.path.insert(0,str(ROOT/'experiments'))
 from experiments.error_analysis.library import embeddings
 from runtime import acquire_run_lock,atomic_json,file_hash
+from model import valid_history_windows
 
 
 class CurveLookup:
@@ -52,7 +53,7 @@ def load_cached_library(source,out,k,h,bridge_mode='keep'):
                     name_index=len(names);names.append(curve)
                     if len(values)<k+1+h: continue
                     windows=np.lib.stride_tricks.sliding_window_view(np.maximum(values,1e-8),k+1+h)
-                    starts=np.flatnonzero(np.var(windows[:,:k+1],axis=1,ddof=1)>0)+1
+                    starts=np.flatnonzero(valid_history_windows(windows[:,:k+1]))+1
                     np.full(len(starts),name_index,dtype='<u4').tofile(codes)
                     starts.astype('<u4').tofile(steps)
                     count+=len(starts)

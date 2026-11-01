@@ -13,6 +13,7 @@ sys.path.insert(0,str(ROOT/'experiments'))
 sys.path.insert(0,str(ROOT/'experiments/forecasting'))
 from runtime import atomic_json,file_hash
 from neighbors import ExactNeighbors
+from model import WINDOW_FILTER
 from library import load_prefix,embed
 
 
@@ -30,6 +31,8 @@ def run_group(args):
     tick=time.perf_counter();x,y,codes=embed(curves,curve_ids,args.k,out/'scratch')
     embed_seconds=time.perf_counter()-tick
     del curves
+    constant_rows=sum(int(np.all(x[j:j+100000]==0,axis=1).sum()) for j in range(0,len(x),100000))
+    if constant_rows:raise ValueError('nonconstant_v2 retained a constant history')
     if max(args.m)>len(x):raise ValueError(f'm exceeds M: {max(args.m)} > {len(x)}')
     tick=time.perf_counter();index=ExactNeighbors(x,workers=1)
     index_seconds=time.perf_counter()-tick
@@ -89,7 +92,11 @@ def run_group(args):
         pd.DataFrame(early).to_csv(out/'early_forecasts.csv.gz',index=False)
         pd.DataFrame(availability).to_csv(out/'early_availability.csv',index=False)
     peak=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*(1 if sys.platform=='darwin' else 1024)
-    stats=dict(seed=args.seed,N=args.N,k=args.k,M=len(x),accepted_curves=accepted,
+    stats=dict(seed=args.seed,N=args.N,k=args.k,M=len(x),accepted_curves=accepted,window_filter=WINDOW_FILTER,
+        constant_history_rows=constant_rows,h=4,bridge_mode='omit',context_sha256=file_hash(args.context),
+        packed_sha256={n:file_hash(args.packed/n) for n in ['curves.npz','attempts.npz']},
+        source_sha256={str(p.relative_to(ROOT)):file_hash(p) for p in [Path(__file__),Path(__file__).with_name('library.py'),
+            *[ROOT/'experiments/forecasting'/n for n in ['model.py','smoothing.py','neighbors.py']]]},
         prefix_load_seconds=prefix_load_seconds,
         embedding_seconds=embed_seconds,index_seconds=index_seconds,
         shared_query_seconds=shared_seconds,shared_query_max_m=max(args.m),cases=len(queries),

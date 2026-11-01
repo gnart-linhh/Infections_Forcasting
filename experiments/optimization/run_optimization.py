@@ -16,6 +16,7 @@ from objective import ROOT, SyntheticObjective, generate_bank, embeddings, evalu
 from bank import write_audit
 from runtime import atomic_json, file_hash, acquire_run_lock
 from compare_paper import COMPARISON_PROTOCOL, run_comparison
+from model import WINDOW_FILTER
 
 PAPER = dict(bounds=[[10000, 30000], [2, 7], [1000, 6000]], initial_points=99, iterations=5, max_origins=0)
 
@@ -65,11 +66,12 @@ def main():
     source_paths = [Path(__file__), Path(__file__).with_name('bayes.py'), Path(__file__).with_name('objective.py'),
                     ROOT / 'experiments/runtime.py', ROOT / 'experiments/synthetic/generator.py',
                     ROOT / 'experiments/synthetic/bank.py', ROOT / 'experiments/forecasting/neighbors.py',
-                    ROOT / 'experiments/forecasting/smoothing.py', Path(__file__).with_name('compare_paper.py')]
+                    ROOT / 'experiments/forecasting/smoothing.py', ROOT / 'experiments/forecasting/model.py',
+                    Path(__file__).with_name('compare_paper.py')]
     config = dict(profile='paper' if full_budget else 'custom', full_search_budget=full_budget,
         bounds=dict(zip(NAMES, bounds)), initial_points=initial, iterations=iterations,
         max_origins_per_curve=max_origins, test_curves_per_family=args.test_curves_per_family,
-        embedding_mode=args.embedding_mode, smoothing=args.smoothing, seed=args.seed, h=4,
+        embedding_mode=args.embedding_mode, window_filter=WINDOW_FILTER, smoothing=args.smoothing, seed=args.seed, h=4,
         validation_protocol=args.validation_protocol, validation_curves_per_family=args.validation_curves_per_family,
         min_history_for_fixed_validation=bounds[1][1]+1 if args.validation_protocol=='fixed' else None,
         objective='mean absolute error pooled over synthetic validation forecasts',
@@ -176,7 +178,8 @@ def main():
         limitations=['Python RNG, SciPy LSODA/GAM optimizer/GP differ numerically from R',
             'Resampled validation changes the holdout samples across trials' if args.validation_protocol=='resampled' else 'Fixed validation differs from upstream',
             'Best observed configuration is retained; finite-budget BO does not prove a global optimum',
-            'Initial LHS objective evaluations run sequentially; curve generation uses independent processes'])
+            'Initial LHS objectives run sequentially; generation and curve-wise GAM preprocessing use independent processes',
+            'GAM preprocessing preserves curve/origin ordering; exact neighbor queries use the requested workers'])
     atomic_json(out / 'metadata.json', metadata)
     atomic_json(out / 'progress.json', dict(status='complete', completed_trials=len(history), total_trials=initial+iterations))
     # Only transient caches are removed; selected bank, detailed audit and RNG checkpoint remain.

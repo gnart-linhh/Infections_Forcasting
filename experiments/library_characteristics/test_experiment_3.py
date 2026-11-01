@@ -1,5 +1,6 @@
 """Sampling controls, unchanged forecast core, paired scores and transactional resume."""
 import csv
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -13,6 +14,59 @@ from generator import SyntheticCurve
 
 
 class LibraryTests(unittest.TestCase):
+    def test_legacy_reference_is_rejected_before_comparing_points(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);folder=root/'groups/seed_0_N18387_k5';folder.mkdir(parents=True)
+            (folder/'runtime.json').write_text(json.dumps(dict(M=14968931)))
+            with self.assertRaisesRegex(ValueError,'Outdated'):
+                e3.reference_identity(root,0)
+
+    def test_equal_curves_excludes_empty_curves_and_preserves_nested_mixture(self):
+        families=np.repeat(np.arange(3),15);eligible=np.ones(45,dtype=bool);eligible[::5]=False
+        with patch.object(e3,'CURVES',6):
+            mixed=e3.select_curves(families,0,'mixed',eligible)
+            self.assertEqual(len(mixed),6);self.assertTrue(eligible[mixed].all())
+            for f,library in enumerate(e3.LIBRARIES[:3]):
+                single=e3.select_curves(families,0,library,eligible)
+                self.assertTrue(eligible[single].all())
+                self.assertTrue(set(mixed[families[mixed]==f]).issubset(single))
+
+    def test_controls_reject_uniform_legacy_filter_and_retained_constants(self):
+        for filter_name,constant,message in [('numpy_variance_v1',0,'outdated'),(e3.WINDOW_FILTER,1,'constant')]:
+            with tempfile.TemporaryDirectory() as temp:
+                db=e3.connect(temp);e3.initialize(db)
+                meta=dict(window_filter=filter_name,accepted_curves=1,valid_windows=2,
+                          family_curves={'a':1},family_windows={'a':2},constant_history_windows=constant)
+                for seed in e3.SEEDS:
+                    for regime in e3.REGIMES:
+                        for lib in e3.LIBRARIES:db.execute('INSERT INTO runs VALUES (?,?,?,?)',(seed,regime,lib,json.dumps(meta)))
+                with self.assertRaisesRegex(ValueError,message):e3.verify_controls(db)
+                db.close()
+
+    def test_reference_comparison_checks_all_points_and_distances(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);folder=root/'groups/seed_0_N18387_k5';folder.mkdir(parents=True)
+            db=e3.connect(root);e3.initialize(db)
+            cases=pd.DataFrame(dict(case_id=range(2500),series=[f'S{i}' for i in range(2500)],forecast_origin='2020-01-04'))
+            obs=pd.DataFrame([(i,h,['2020-01-11','2020-01-18','2020-01-25','2020-02-01'][h-1],float(i+h)) for i in range(2500) for h in range(1,5)],
+                             columns=['case_id','horizon','target_end_date','actual'])
+            obs.to_sql('observations',db,index=False)
+            ref=obs.merge(cases,on='case_id');ref['m']=4422;ref['prediction']=ref.actual+1
+            ref.drop(columns='case_id').to_csv(folder/'forecasts.csv.gz',index=False)
+            matches=cases.copy();matches['m']=4422;matches['minimum_distance']=0.;matches['median_distance']=1.;matches['maximum_distance']=2.
+            matches.drop(columns='case_id').to_csv(folder/'matches.csv.gz',index=False)
+            predictions=list(ref[['case_id','horizon','prediction']].itertuples(index=False,name=None))
+            matching=list(matches[['case_id','minimum_distance','median_distance','maximum_distance']].itertuples(index=False,name=None))
+            with patch.object(e3,'reference_identity'):
+                self.assertEqual(e3.verify_reference(root,0,cases,predictions,matching,db),10000)
+                wrong=list(predictions);i,h,p=wrong[0];wrong[0]=(i,h,p+1)
+                with self.assertRaisesRegex(ValueError,'predictions do not reproduce'):
+                    e3.verify_reference(root,0,cases,wrong,matching,db)
+                wrong=list(matching);wrong[0]=(0,0.,1.,3.)
+                with self.assertRaisesRegex(ValueError,'matching does not reproduce'):
+                    e3.verify_reference(root,0,cases,predictions,wrong,db)
+            db.close()
+
     def test_curve_budget_nested_mixture_and_reproducibility(self):
         families = np.repeat(np.arange(3), 15)
         with patch.object(e3,'CURVES',6):

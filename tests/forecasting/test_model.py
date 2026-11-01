@@ -7,14 +7,44 @@ sys.path.insert(0, str(ROOT / "experiments/data"))
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 import numpy as np
-from model import load_library, forecast
+from model import load_library, forecast, valid_history_windows
 from run_backtest import load_truth
 from neighbors import ExactNeighbors
 
 
 class ModelTests(unittest.TestCase):
+    def test_exactly_flat_windows_rejected_but_one_ulp_variation_retained(self):
+        for width in range(2,11):
+            histories=np.full((3,width),1e-8)
+            histories[1,-1]=np.nextafter(1e-8,np.inf)
+            histories[2]=np.arange(width)
+            np.testing.assert_array_equal(valid_history_windows(histories),[False,True,True])
+
+    def test_source_bridge_indexing_on_explicit_levels(self):
+        # run_smoa.R: diff(c(last X, y)); figure_2.R: diff(y).
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'curves.csv'
+            path.write_text('curve_id,step,value\n'+''.join(f'a,{i},{v}\n' for i,v in enumerate([1,2,4,7,11,16],1)))
+            x,keep,_,_=load_library(path,2,2)
+            xx,extra,_,_=load_library(path,2,3)
+            np.testing.assert_array_equal(x[0],[1,2])
+            np.testing.assert_array_equal(keep[0],[3,4])
+            np.testing.assert_array_equal(xx[0],[1,2])
+            np.testing.assert_array_equal(extra[0,1:],[4,5])
+
+    def test_source_median_increments_then_cumsum_with_raw_anchor(self):
+        # Median of cumulative analogue paths would give a different second step.
+        y=np.array([[0,100],[100,0],[100,100]])
+        with patch('model.thin_plate_gcv',return_value=np.array([2,4,8,16,999])):
+            point,_,_=forecast([5,10,15,20,30],np.zeros((3,2)),y,3,'gam')
+        np.testing.assert_array_equal(point,[130,230])
+        self.assertEqual(np.median(np.cumsum(y,axis=1),axis=0)[1],100)
+        with self.assertRaisesRegex(ValueError,'k\\+1'):
+            forecast([1,2],np.zeros((3,2)),y,3,'none')
+
     def test_windows_do_not_cross_curve_boundaries(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'curves.csv'

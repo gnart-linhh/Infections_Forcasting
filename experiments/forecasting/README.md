@@ -1,5 +1,7 @@
 # Bước 3–5 — UQ → prediction → evaluation
 
+**Audit 2026-11-01:** code mới dùng `nonconstant_v2`, loại history hoàn toàn phẳng. Các kết quả/outputs/notebook đã lưu bên dưới vẫn thuộc NumPy filter v1; chưa chạy lại full hoặc BO sau sửa. [Đối chiếu R, số lượng windows và phạm vi ảnh hưởng](../../REPRODUCTION_AUDIT.md). Dùng output/cache directory mới; không resume run v1 bằng code mới.
+
 Thứ tự toàn project: synthetic (1) → Bayesian selection (2) → UQ (3) →
 prediction (4) → evaluation (5). Benchmark nhiều bang thuộc evaluation;
 không đặt Bayesian optimization sau benchmark.

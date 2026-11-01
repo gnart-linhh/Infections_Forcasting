@@ -1,22 +1,34 @@
 # Experiment 1 — Comparative Evaluation under Limited Historical Data
 
-**Đã triển khai nhóm chính theo thiết kế bên dưới.** Trạng thái lượt chạy tại `outputs/experiment_1/progress.json`; chỉ xem là hoàn tất khi `status=complete` và `primary_complete=true`. Holt/ARIMA cần statsmodels và được ghi `dependency_missing` khi chưa có package, không có accuracy estimates thay thế.
+Lượt mới: **protocol v3 / nonconstant_v2**, output
+`outputs/experiment_1_nonconstant_v2/`. [Report hiện hành](../../outputs/experiment_1_nonconstant_v2/report.md)
+và [experiment_1.ipynb](experiment_1.ipynb) đọc cùng bộ kết quả. Chỉ hoàn tất khi
+progress.json có status=complete, primary_complete=true và inputs_unchanged=true.
+Kết quả trước audit nằm riêng ở `outputs/experiment_1/`, không được import vào lượt này.
 
-Mở [experiment_1.ipynb](experiment_1.ipynb) bằng kernel `.venv` sau khi runner hoàn tất. Notebook chỉ đọc tables/figures/database đã sinh. [Report](../../outputs/experiment_1/report.md) chứa kết quả thực tế; phần còn lại của README giữ specification đã chốt trước scoring.
+- Cả ba training banks gọi cùng sensitivity.library.embed(). Mọi x/y/curve-id row được kiểm tra độc lập với level windows, floor 1e-8, history 6 levels, width 11, omit bridge, h=4. Rule fingerprint và hashes của arrays lưu trong jobs metadata; scratch được xóa sau mỗi bank.
+- Synthetic test cho phép số 0, loại negative/nonfinite. Audit toàn bộ 7.200 attempts và đối chiếu gate <=0 cũ để đo tác động lên eligible/selected IDs. Generator hiện floor 1e-10; cohort vẫn có điều kiện weekly counts, onset≥10 và 28 bước follow-up.
+- Đã cài/pin statsmodels 0.15.0 và patsy 1.0.3. Holt và ARIMA chạy nhóm bổ sung B T16/T24, giữ nguyên optimizer/candidate set đã định. Fit không hội tụ không có forecast thay thế.
+- RQ2 dùng all-secondary common units qua cả T16/T24 và gap-change bootstrap; pairwise masks báo riêng. Không suy kết luận cho toàn bộ ETS/SARIMA hay những T ngoài scope.
+- Report sinh từ database mới, mô tả hướng so sánh bằng các số hiện tại. Notebook kiểm tra protocol, rule fingerprints, source identity và artifact hashes trước khi hiển thị; không có MAE v1 chép sang. Các MAE primary trùng v1 đã được xác nhận bằng đối chiếu độc lập toàn bộ 464.800 dự báo điểm và 16.600 history hashes sau khi rerun; không suy kết quả này trước khi chạy.
+
+Runner, tests, notebook và README là bốn file trong folder này. Không thêm
+script/helper hoặc bộ forecast CSV trùng database. Source snapshot tối thiểu
+và lệnh resume nằm trong outputs để bảo toàn lượt chạy dài.
 
 ```bash
+# Tham khảo khởi chạy fresh output; không chạy trùng job đang có.
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
-  .venv/bin/python -u experiments/comparison/experiment_1.py
-# Tiếp tục completed blocks, không tính lại forecasts đã lưu:
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
-  .venv/bin/python -u experiments/comparison/experiment_1.py --resume
+  .venv/bin/python -u experiments/comparison/experiment_1.py \
+  --workers 4 --require-secondary --output-dir outputs/experiment_1_nonconstant_v2
 .venv/bin/python -m unittest discover -s experiments/comparison -v
+# Sau khi progress.json complete:
 .venv/bin/python experiments/comparison/experiment_1.py --execute-notebook
 ```
 
-Lượt hiện hành ghi console log tại `outputs/experiment_1/run.log`. Không cần cài thêm package cho nhóm chính. Folder chỉ có bốn file nguồn: README, runner/phân tích, tests và notebook.
-
-Mục tiêu là kiểm tra sMOA có đáng dùng khi mới có ít quan sát của một dịch bệnh hay không, và lợi thế/hạn chế thay đổi ra sao khi tăng lượng history. E1 là phân tích bổ sung cho Python implementation, không phải một thí nghiệm đã có nguyên dạng trong paper.
+Log: `outputs/experiment_1_nonconstant_v2/run.log`. Muốn resume, dùng đúng
+resume_command trong launch.json (frozen source), giữ nguyên versions và inputs.
+Package/core versions, workers và thread limits được ghi vào protocol.json.
 
 ## 1. Những lựa chọn chính
 
@@ -100,7 +112,7 @@ Model chỉ nhận `y[tau:tau+T]`, T∈{6,8,11}; origin là `tau+T-1`, target l�
 - Dùng nguyên generator của project. Chỉ nhận curves có `time_cadence='weekly'` và `scale='counts'` vào test chính. Monthly steps không được gọi là weeks; proportion curves không được floor toàn bộ thành 1 rồi tính như count forecasts.
 - Ba test seeds 0/1/2, **100 eligible curves/family/test seed**: tổng 900 independent curves, cân bằng rollercoaster/wiggle/seasonal.
 - Namespace mới `[20261104,310,test_seed,family_index,attempt_index]`. Không trùng BO train/validation/test hoặc scalar training seeds của E2. Audit phải kiểm tra disjoint RNG keys và exact duplicate content hashes, giữ nguồn của mọi rejected attempt. Numeric duplicates được flag và truy nguồn; distinct RNG draws vẫn có thể sinh cùng một curve nên không tự loại duplicate chỉ vì đã thấy output trùng.
-- Budget cố định **800 attempts/family/test seed**, tổng 7.200 attempts; không redraw vì forecast sai. Trong mỗi family/test seed, lấy 100 curves đầu theo attempted index đáp ứng metadata, finite values, onset rule và có đủ T_max+4=28 weeks kể từ onset.
+- Budget cố định **800 attempts/family/test seed**, tổng 7.200 attempts; không redraw vì forecast sai. Trong mỗi family/test seed, lấy 100 curves đầu theo attempted index đáp ứng metadata, finite nonnegative values (zero allowed), onset rule và có đủ T_max+4=28 weeks kể từ onset.
 - Nếu một cell không đủ 100 curves, dừng trước scoring và ghi thiếu cohort; không âm thầm giảm quota, nới criteria hoặc tăng attempts sau khi đã xem errors.
 - Chỉ kiểm tra metadata, data integrity và horizon availability để chọn cohort. Loại do thiếu follow-up length là điều kiện quan sát của cohort, cần báo; không loại theo phase, future magnitude hoặc model performance.
 - Test seeds và training-bank seeds **crossed**, không ghép train-seed0 chỉ với test-seed0. Mỗi sMOA bank dự báo cùng toàn bộ 900 curves; baselines chạy một lần trên từng history.
@@ -234,34 +246,51 @@ Tests khi triển khai phải kiểm tra: đúng T values và embargo; onset kh�
 
 Hiện `.venv` có NumPy/SciPy/Pandas nhưng **chưa có statsmodels/patsy**. Primary SES được triển khai với SciPy theo specification ở trên; secondary cần dependency phù hợp. Không cài thêm package trong lượt triển khai này. Mọi con số ở bảng feasibility là số cases có dữ liệu, không phải forecast accuracy; đọc actual metrics từ report/CSV sau khi chạy hoàn tất.
 
-## 10. Kết quả lượt chạy đầu
+## 10. Kết quả đã chạy lại — protocol v3 / nonconstant_v2
 
-Nhóm chính hoàn tất **464.800 forecasts**, **16.600 cases**, **0 fit failures**; giữ toàn bộ common cohort. Synthetic test đạt đủ 900 curves từ 7.200 attempts, không có content hash trùng training hoặc trùng nhau. Lượt đầu mất **443,61 giây (~7 phút 24 giây)**, gồm fresh-test generation, preparation, baselines, ba sMOA banks và analysis, không gồm sinh training banks trước đây.
+Đã complete tại `outputs/experiment_1_nonconstant_v2/`. **16.600/16.600**
+history cases hợp lệ chung cho nhóm chính, **464.800 forecasts**; 900 synthetic
+test curves từ 7.200 attempts. Đã kiểm tra lại **74 input/source hashes** và
+**18 output artifact hashes**. Notebook đã execute đủ **8 code cells**, cùng
+protocol/data/report; không có cell lỗi.
 
-Real A, MAE trung bình qua ba sMOA banks:
+| Training bank | Valid windows | Rows được audit độc lập |
+| --- | ---: | ---: |
+| Seed 0 | 12.921.078 | 12.921.078 |
+| Seed 1 | 12.895.737 | 12.895.737 |
+| Seed 2 | 12.901.046 | 12.901.046 |
 
-| T | Persistence | MA(3) | Drift | SES | sMOA |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 6 | 1.643,22 | 1.661,96 | 2.970,14 | **1.642,44** | 1.927,80 |
-| 8 | 1.401,74 | 1.913,12 | 2.552,10 | 1.400,80 | **970,76** |
-| 11 | 1.752,18 | 2.068,40 | 2.014,87 | 1.757,09 | **1.420,94** |
+Cả ba dùng cùng rule fingerprint `5207449c857e0a2d…`. Hash x/y/curve-id arrays
+được lưu trong jobs metadata/progress trước khi xóa scratch.
 
-T6/T8 paired CI sMOA−Persistence còn chứa 0; T11 delta **−331,24**, CI **[−534,20; −122,96]**. Ở T8 raw MAE tốt hơn nhưng normalized MAE sMOA **0,4466**, SES **0,3379**: chưa thể coi sMOA thắng mọi metric hoặc mọi scale.
+Holt thành công **5.494/5.500** in-scope fits, sáu fit_failed. ARIMA thành công
+**5.483/5.500**, 17 no_valid_candidate. Không có dependency_missing hoặc
+forecast fallback. All-secondary common mask giữ **5.454/5.500 history cases**
+qua cả T16/T24; ngoài scope không được tính vào fit-failure rate.
 
-Real B, cùng 1.850 fixed origins/cases cho mọi T:
+Trên real B, cùng **7.380 target instances ở mỗi T** của shared secondary cohort:
 
-| T | Persistence MAE | sMOA MAE | sMOA normalized MAE |
+| T | sMOA MAE | Holt MAE | ARIMA MAE |
 | --- | ---: | ---: | ---: |
-| 6 | 7.460,58 | 6.967,65 | **0,6111** |
-| 8 | 7.460,58 | 6.819,98 | 0,6171 |
-| 11 | 7.460,58 | **6.509,42** | 0,6185 |
-| 16 | 7.460,58 | 6.589,34 | 0,6176 |
-| 24 | 7.460,58 | 6.559,52 | 0,6215 |
+| 16 | 6.602,15 | 8.614,39 | 8.323,16 |
+| 24 | 6.571,60 | 8.351,09 | 7.825,32 |
 
-sMOA có raw MAE thấp nhất trong nhóm chính ở cả năm T của real B; so Persistence giảm khoảng **6,61%–12,75%**. T24−T6 sMOA delta **−408,13**, CI **[−707,19; −187,26]**. Gain không đơn điệu; normalized MAE không cùng xu hướng với raw MAE. Persistence/MA3 đã kiểm tra predictions không đổi qua T, trong khi khoảng **99,16%** longer-history GAM queries khác T6 ngoài tolerance 1e-10.
+Raw MAE của sMOA thấp hơn hai models trong cohort này. Từ T16 lên T24,
+(sMOA−Holt) gap tăng **232,74**, CI95% [67,20; 384,20]; (sMOA−ARIMA) gap tăng
+**467,29**, CI95% [273,10; 697,08]. Lợi thế raw-MAE của sMOA thu hẹp khi được
+cấp thêm history. Synthetic gap-change intervals vẫn qua zero; không suy rộng
+xu hướng real sang mọi generator/pathogen. Các số primary-common dùng 7.400
+targets/T, nên không ghép chúng với MAE secondary trên 7.380 targets/T.
 
-Synthetic sMOA có raw MAE thấp nhất ở mọi T đã chạy, nhưng normalized losses có đuôi rất dài: riêng B T6, mean **251,70**, median **0,320**, top 1% losses đóng góp **98,18%** tổng normalized loss. Giữ toàn bộ cases và metric specification, không loại extreme errors để làm đẹp kết quả.
+Zero audit: **0** returned curves chứa exact zero, **0** eligible curves bị
+legacy <=0 gate loại, **0** selected IDs thay đổi dưới gate cũ. **775/900**
+selected curves chạm floor 1e-10. Generator tự floor returned values và có thể
+trả None trước đó, kể cả khi output toàn không dương; zero audit này là
+post-generator, không đo riêng nguyên nhân từng None. Cohort vẫn condition
+trên weekly counts/onset≥10/follow-up≥28, không đại diện mọi episode all-zero
+hoặc chưa reporting onset. Gate mới chấp nhận zero để không thêm điều kiện
+loại bỏ khi có dữ liệu zero hợp lệ.
 
-Không có overall comparison nào đạt interval criterion tương đương thực tiễn ±5%; điều đó không chứng minh mọi model khác nhau đáng kể. Runtime online sMOA ở real B khoảng **3,6–4,6 ms/case** (GAM charged + batched matching/aggregation), SES khoảng **0,10–0,23 ms/case**; preparation/index **12–14 giây/bank**, peak RSS khoảng **1,64–1,75 GB**. Các microsecond baselines còn rẻ hơn, nhưng timing quá nhỏ không đủ để xếp hạng chi tiết.
-
-**Holt/ARIMA chưa được chấm accuracy**: mỗi model có 5.500 in-scope blocks `dependency_missing`; code adapters chưa được integration-test với statsmodels cài thật trong môi trường này. Không suy ra rằng chúng kém sMOA. Primary được kiểm tra bằng 11 tests; notebook đọc cùng database/tables và sáu bộ hình, không chạy lại models.
+16 unit tests E1 và 53 forecasting tests pass. Chi tiết per-bank/horizon,
+RMSE/normalized error, paired CI, fit warnings/candidates và runtime nằm trong
+[report](../../outputs/experiment_1_nonconstant_v2/report.md), CSV và database mới.

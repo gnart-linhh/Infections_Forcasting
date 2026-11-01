@@ -13,6 +13,114 @@ from runtime import atomic_json,file_hash
 KEYS=['series','forecast_origin','target_end_date','horizon']
 
 
+def e2_reference(e2, seed=0):
+    """Validate the frozen v4 reference, including numerical source and bank identity."""
+    from forecasting.model import WINDOW_FILTER
+    e2=Path(e2).resolve()
+    read=lambda path: json.loads(path.read_text())
+    protocol=read(e2/'protocol.json');validation=read(e2/'validation.json')
+    if (read(e2/'progress.json').get('status')!='complete'
+        or protocol['design'].get('version')!=4
+        or protocol['design'].get('window_filter')!=WINDOW_FILTER
+        or validation.get('protocol_version')!=4
+        or validation.get('window_filter')!=WINDOW_FILTER
+        or validation.get('constant_history_rows')!=0
+        or validation.get('protocol_sha256')!=file_hash(e2/'protocol.json')):
+        raise ValueError('Require complete E2 v4 with nonconstant_v2 and zero constant histories')
+    if protocol['design']['reference']!=dict(N=18387,k=5,m=4422):
+        raise ValueError('E2 reference parameters changed')
+    group=e2/f'groups/seed_{seed}_N18387_k5';runtime=read(group/'runtime.json')
+    for name,value in dict(seed=seed,N=18387,k=5,h=4,bridge_mode='omit',window_filter=WINDOW_FILTER,constant_history_rows=0,cases=2500).items():
+        if runtime.get(name)!=value:raise ValueError(f'E2 runtime mismatch: {name}')
+    for name in ['experiments/forecasting/model.py','experiments/forecasting/neighbors.py',
+                 'experiments/forecasting/smoothing.py','experiments/sensitivity/library.py']:
+        if file_hash(ROOT/name)!=protocol['source_sha256'][name] or runtime['source_sha256'][name]!=protocol['source_sha256'][name]:
+            raise ValueError(f'E2 numerical core changed: {name}; rerun E2 in a fresh directory')
+    inputs=[e2/'protocol.json',e2/'validation.json',e2/'contexts.npz',e2/'context_metadata.json',group/'complete.json']
+    context_hash=file_hash(e2/'contexts.npz')
+    if context_hash!=runtime['context_sha256'] or context_hash!=read(e2/'context_metadata.json')['contexts_sha256']:
+        raise ValueError('E2 contexts modified')
+    completion=read(group/'complete.json')
+    if completion.get('status')!='complete':raise ValueError('Incomplete E2 reference group')
+    for name,sha in completion['sha256'].items():
+        if file_hash(group/name)!=sha:raise ValueError(f'Modified E2 artifact: {name}')
+        inputs.append(group/name)
+    packed=e2/f'packed/seed_{seed}';inputs.append(packed/'metadata.json')
+    for name,sha in runtime['packed_sha256'].items():
+        if file_hash(packed/name)!=sha:raise ValueError(f'Modified E2 bank: {name}')
+        inputs.append(packed/name)
+    return dict(seed=seed,N=18387,k=5,m=4422,M=runtime['M'],window_filter=WINDOW_FILTER,
+                constant_history_rows=0,context_sha256=context_hash,
+                input_sha256={str(p):file_hash(p) for p in inputs})
+
+
+def compare_reference(instances, reference, expected_targets=10000):
+    """Require bitwise numeric equality and the entire common target set."""
+    if len(instances)!=expected_targets or len(reference)!=expected_targets:
+        raise ValueError('Incomplete reference cohort')
+    paired=instances.merge(reference[KEYS+['prediction','actual']],on=KEYS,
+                           how='outer',validate='one_to_one',suffixes=('','_reference'),indicator=True)
+    if not paired._merge.eq('both').all():raise ValueError('Reference target keys differ')
+    for name in ['prediction','actual']:
+        if not np.isfinite(paired[[name,name+'_reference']]).all().all() or not paired[name].eq(paired[name+'_reference']).all():
+            raise ValueError(f'Reference {name} mismatch')
+    return dict(targets=len(paired),states=paired.series.nunique(),origins=paired.forecast_origin.nunique(),
+                equal_predictions=len(paired),label_mismatches=0,max_absolute_prediction_difference=0.)
+
+
+def validate_cache(cache, x, reference):
+    """Check actual cached histories rather than trusting a version label."""
+    from forecasting.model import WINDOW_FILTER
+    metadata=json.loads((cache/'metadata.json').read_text())
+    if metadata.get('version')!=2 or metadata.get('window_filter')!=WINDOW_FILTER or len(x)!=reference['M']:
+        raise ValueError('Cache version/filter/row count differs from E2')
+    # Histories here are increments: constant levels have all-zero increments.
+    zeros=sum(int(np.all(x[start:start+200000]==0,axis=1).sum()) for start in range(0,len(x),200000))
+    if zeros:raise ValueError('Constant history retained in cache')
+    return dict(path=str(cache.resolve()),version=2,window_filter=WINDOW_FILTER,rows=len(x),constant_history_rows=zeros,
+                metadata_sha256=file_hash(cache/'metadata.json'))
+
+
+def validate_result(out, experiment):
+    """Notebook gate: complete alone is insufficient to display current results."""
+    from forecasting.model import WINDOW_FILTER
+    out=Path(out);read=lambda path: json.loads(path.read_text())
+    progress=read(out/'progress.json');protocol=read(out/'protocol.json')
+    version={4:4,5:2}[experiment]
+    if (progress.get('status')!='complete' or progress.get('version')!=version
+        or protocol.get('version')!=version or progress.get('window_filter')!=WINDOW_FILTER
+        or protocol.get('window_filter')!=WINDOW_FILTER or not progress.get('inputs_unchanged')
+        or progress.get('protocol_sha256')!=file_hash(out/'protocol.json')):
+        raise ValueError('Result is incomplete or uses a stale protocol/filter')
+    for name,sha in protocol['input_sha256'].items():
+        if file_hash(Path(name))!=sha:raise ValueError(f'Modified input: {name}')
+    sources=protocol['source_sha256'] if experiment==4 else {
+        **protocol['dependencies_sha256'],'experiments/analogue_quality/experiment_5.py':protocol['source_sha256']}
+    for name,sha in sources.items():
+        if file_hash(ROOT/name)!=sha:raise ValueError(f'Current source differs from result: {name}')
+    for name,sha in progress['artifacts_sha256'].items():
+        if file_hash(out/name)!=sha:raise ValueError(f'Modified result artifact: {name}')
+    cache=progress['cache'];path=Path(cache['path']);metadata=read(path/'metadata.json')
+    if (file_hash(path/'metadata.json')!=cache['metadata_sha256'] or cache['constant_history_rows']!=0
+        or metadata['window_filter']!=WINDOW_FILTER or metadata['rows']!=cache['rows']):
+        raise ValueError('Stale cache provenance')
+    for name in ['x','y']:
+        if file_hash(path/f'{name}.dat')!=metadata[f'{name}_sha256']:raise ValueError('Cache data modified')
+    if experiment==4:
+        if progress['forecast_count']!=10000 or progress['e2_parity']['equal_predictions']!=10000:
+            raise ValueError('Incomplete E4/E2 exact parity')
+        references=[protocol['e2_reference']]
+    else:
+        if progress['verified_forecasts']!=10000 or progress['verified_distance_cases']!=2500 or progress['cases']!=2500:
+            raise ValueError('Incomplete E5 exact replay')
+        if progress['analysis_source_sha256']!=protocol['source_sha256']:raise ValueError('E5 analysis source differs')
+        references=protocol['e2_references']
+    for reference in references:
+        e2=Path(next(p for p in reference['input_sha256'] if p.endswith('/protocol.json'))).parent
+        if e2_reference(e2,reference['seed'])!=reference:raise ValueError('E2 reference changed')
+    return progress
+
+
 def compare(instances,full):
     paths=sorted((full/'04_prediction').glob('*/forecasts.csv'))
     if not paths:raise ValueError(f'No full forecasts: {full}')

@@ -13,7 +13,7 @@ import pandas as pd
 HERE=Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE));sys.path.insert(0,str(HERE.parent/'forecasting'))
 from design import configurations,REFERENCE,protocol
-from library import pack_bank,load_prefix,embed
+from library import pack_bank,load_prefix,embed,reuse_banks
 from engine import aggregate,run_group
 from model import forecast,load_library
 from smoothing import thin_plate_gcv
@@ -56,6 +56,24 @@ class SensitivityTests(unittest.TestCase):
             self.assertTrue(set(small_ids)<set(large_ids))
             reference=dict(zip(large_ids,large))
             for curve,ident in zip(small,small_ids):np.testing.assert_array_equal(curve.ts,reference[ident].ts)
+
+    def test_reused_banks_link_without_copy_and_reject_modified_data(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);source=self.fixture(root);old=root/'old';new=root/'new'
+            pack_bank(source,old/'packed/seed_0',offset=0,max_n=4)
+            result=reuse_banks(old,new,levels=(4,),seeds=(0,))
+            self.assertTrue((new/'packed/seed_0').is_symlink())
+            self.assertEqual(result['banks'][0]['accepted'],11)
+            (old/'packed/seed_0/attempts.npz').write_bytes(b'changed')
+            with self.assertRaisesRegex(ValueError,'Modified reused bank'):
+                reuse_banks(old,new,levels=(4,),seeds=(0,))
+
+    def test_analysis_rejects_legacy_protocol_even_when_complete(self):
+        from analysis import analyze
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);atomic_json(root/'protocol.json',dict(design=dict(version=3)))
+            with self.assertRaisesRegex(ValueError,'outdated E2 protocol'):
+                analyze(root)
 
     def test_extension_preserves_prefix_ids_values_and_rejections(self):
         from generator import SyntheticCurve
@@ -167,6 +185,10 @@ class SensitivityTests(unittest.TestCase):
             result=segment_validity_audit(root,pd.DataFrame(runtime))
             self.assertTrue(result.constant_history_rows.eq(10).all())
             self.assertTrue(result.nonconstant_rows.eq(0).all())
+            updated=pd.DataFrame(runtime).assign(M=0,window_filter='nonconstant_v2')
+            corrected=segment_validity_audit(root,updated)
+            self.assertTrue(corrected.constant_history_rows.eq(0).all())
+            self.assertTrue(corrected.M_core.eq(0).all())
 
 
 if __name__=='__main__':unittest.main()

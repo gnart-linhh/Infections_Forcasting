@@ -138,15 +138,18 @@ class ReproductionAuditTests(unittest.TestCase):
             root=Path(tmp);(root/'best_library').mkdir()
             (root/'best_params.json').write_text('{"num_curves":10,"k":3,"closest":20}')
             (root/'best_library/curves.csv').write_text('curve_id,step,value\na,1,2\n')
-            (root/'config.json').write_text('{}')
+            (root/'config.json').write_text('{"window_filter":"nonconstant_v2"}')
             hashes={name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in ['best_params.json','best_library/curves.csv']}
             (root/'metadata.json').write_text(json.dumps(dict(status='complete',artifacts_sha256=hashes)))
             args=parser().parse_args(['--truth','irrelevant.csv','--selection-dir',str(root)])
             apply_selection(args);self.assertEqual(args.k,3);self.assertEqual(args.closest,20)
-            (root/'config.json').write_text('{"smoothing":"spline"}')
+            (root/'config.json').write_text('{"smoothing":"spline","window_filter":"nonconstant_v2"}')
             with self.assertRaisesRegex(ValueError,'BO used spline'): apply_selection(args)
             args.smoothing='spline'
             apply_selection(args)
+            (root/'config.json').write_text('{"smoothing":"spline"}')
+            with self.assertRaisesRegex(ValueError,'legacy window filter'): apply_selection(args)
+            (root/'config.json').write_text('{"smoothing":"spline","window_filter":"nonconstant_v2"}')
             (root/'best_library/curves.csv').write_text('changed')
             with self.assertRaisesRegex(ValueError,'Modified selection'): apply_selection(args)
 

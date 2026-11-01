@@ -17,6 +17,7 @@ sys.path.insert(0,str(ROOT/'experiments/forecasting'))
 from runtime import acquire_run_lock,atomic_json,file_hash
 from prepare_weekly_archive import prepare,common_schedule
 from selection import apply_selection
+from model import WINDOW_FILTER
 
 
 def compare_runs(paper_run,bo_run,out):
@@ -96,7 +97,7 @@ def run(a):
     params=json.loads((a.selection_dir/'best_params.json').read_text()) if a.selection_dir else dict(num_curves=18387,k=5,closest=4422)
     if a.embedding_cache is None:
         # Distinct winners must never share a cache just because k happens to match.
-        a.embedding_cache=a.archive_dir.parent/f'embedding_{file_hash(a.synthetic)[:16]}_k{a.k}_h4_{a.bridge_mode}'
+        a.embedding_cache=a.archive_dir.parent/f'embedding_{file_hash(a.synthetic)[:16]}_k{a.k}_h4_{a.bridge_mode}_{WINDOW_FILTER}'
     code_paths=[Path(__file__),ROOT/'experiments/runtime.py',ROOT/'experiments/error_analysis/library.py']
     code_paths += [ROOT/'experiments/data'/n for n in ['prepare_weekly_archive.py','fetch_paper_data.py']]
     code_paths += [p for p in (ROOT/'experiments/forecasting').glob('*.py') if not p.name.startswith('test_')]
@@ -109,7 +110,7 @@ def run(a):
                 manifest=str(a.manifest.resolve()),manifest_sha256=file_hash(a.manifest),
                 truth_sha256={r.series:file_hash(a.manifest.parent/r.truth) for r in entries.itertuples()},
                 archive_dir=str(a.archive_dir.resolve()),origins=origins,states=50,targets_per_model=len(origins)*50*4,
-                method=dict(models=['smoa'],smoothing='gam',coverage_quantiles=23,coverage_levels=11,interval_draws=5000,seed=13,
+                method=dict(models=['smoa'],smoothing='gam',window_filter=WINDOW_FILTER,coverage_quantiles=23,coverage_levels=11,interval_draws=5000,seed=13,
                             bridge_mode=a.bridge_mode,uq_policy=a.uq_policy,
                             score_truth='raw final',calibration_truth=('final outcomes of earlier issued forecasts, including unmatured targets'
                                 if a.uq_policy=='figure2_retrospective' else 'final matured outcomes'),
@@ -176,7 +177,9 @@ def run(a):
                'Upstream duplicate first-origin prehistory record is not replayed; negative NB labels explicitly excluded.',
                'Full external-model score archive and exact R numerical parity are not claimed.']
         notes += [f'Embedding bridge mode: {a.bridge_mode}. Omit uses diff(y) with h+1 future levels, as Figure 2.',
-                  f'UQ policy: {a.uq_policy}. Retrospective mode uses future labels of earlier-issued forecasts; not a real-time evaluation.',
+                  (f'UQ policy: {a.uq_policy}. Only target_end_date <= forecast origin enters MLE, as run_smoa.R; final revisions and frozen warmup remain retrospective.'
+                   if a.uq_policy=='matured' else
+                   f'UQ policy: {a.uq_policy}. Future labels of earlier-issued forecasts enter MLE, as figure_2.R; not a real-time evaluation.'),
                   'Only bridge handling and UQ eligibility were changed on request; main NB initialization sizes remain [20,10,6,0.3].']
         notes += ['Only sMOA is generated, calibrated, scored and plotted.']
         if a.reuse_predictions_from:
@@ -195,7 +198,7 @@ def run(a):
         raise
 
 
-if __name__=='__main__':
+def parser():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--manifest',type=Path,default=ROOT/'outputs/truth_states/manifest.csv')
     p.add_argument('--archive-dir',type=Path,default=ROOT/'outputs/paper_weekly_archive')
@@ -205,11 +208,16 @@ if __name__=='__main__':
     p.add_argument('--embedding-cache',type=Path)
     p.add_argument('--selection-dir',type=Path)
     p.add_argument('--wait-for-selection',action='store_true')
-    p.add_argument('--paper-run',type=Path,default=ROOT/'outputs/paper_full')
-    p.add_argument('--output-dir',type=Path,default=ROOT/'outputs/paper_full')
+    p.add_argument('--paper-run',type=Path,default=ROOT/'outputs/paper_full_nonconstant_v2_matured')
+    p.add_argument('--output-dir',type=Path,default=ROOT/'outputs/paper_full_nonconstant_v2_matured')
     p.add_argument('--resume',action='store_true')
     p.add_argument('--reuse-predictions-from',type=Path,help='Completed matching run; retain exact issued sMOA values and re-evaluate without refitting')
     p.add_argument('--bridge-mode',choices=['keep','omit'],default='omit')
-    p.add_argument('--uq-policy',choices=['matured','figure2_retrospective'],default='figure2_retrospective')
+    p.add_argument('--uq-policy',choices=['matured','figure2_retrospective'],default='matured',
+                   help='Main run_smoa.R uses matured targets; retrospective is explicit Figure 2 reproduction')
     p.set_defaults(k=5,closest=4422,smoothing='gam')
-    run(p.parse_args())
+    return p
+
+
+if __name__=='__main__':
+    run(parser().parse_args())

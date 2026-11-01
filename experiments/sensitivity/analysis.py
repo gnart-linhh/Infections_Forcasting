@@ -77,11 +77,17 @@ def paired_deltas(data,draws=1000):
 
 
 def segment_validity_audit(out,runtime):
-    """Quantify floating-point constant windows without changing the frozen core."""
+    """Audit the recorded run's filter; never reinterpret old embeddings as v2."""
     from library import load_prefix
+    from model import WINDOW_FILTER, valid_history_windows
     rows=[]
+    runtime=runtime.copy()
+    runtime['window_filter']=runtime.get('window_filter',pd.Series('numpy_variance_v1',index=runtime.index)).fillna('numpy_variance_v1')
     for seed in [0,1,2]:
-        jobs=runtime.loc[runtime.seed.eq(seed),['N','k','M']].drop_duplicates()
+        jobs=runtime.loc[runtime.seed.eq(seed),['N','k','M','window_filter']].drop_duplicates()
+        if jobs.duplicated(['N','k']).any():raise ValueError('Mixed embedding filters in a sensitivity group')
+        policies={(int(r.N),int(r.k)):r.window_filter for r in jobs.itertuples()}
+        if not set(policies.values()) <= {WINDOW_FILTER,'numpy_variance_v1'}:raise ValueError('Unknown window filter')
         packed=out/f'packed/seed_{seed}'
         if jobs.N.max()>18387:packed=out/f'amendments/N{int(jobs.N.max())}/packed/seed_{seed}'
         curves,ids=load_prefix(packed,int(jobs.N.max()))
@@ -93,26 +99,40 @@ def segment_validity_audit(out,runtime):
                 keys=[key for key in counters if key[1]==k and j<key[0]]
                 if not keys or len(values)<k+6:continue
                 history=np.lib.stride_tricks.sliding_window_view(values,k+6)[:,:k+1]
-                accepted=np.var(history,axis=1,ddof=1)>0
-                count=int(accepted.sum());constant=int((accepted & (np.ptp(history,axis=1)==0)).sum())
                 for key in keys:
+                    accepted=(valid_history_windows(history) if policies[key]==WINDOW_FILTER
+                              else np.var(history,axis=1,ddof=1)>0)
+                    count=int(accepted.sum());constant=int((accepted & (np.ptp(history,axis=1)==0)).sum())
                     counters[key][0]+=count;counters[key][1]+=constant
         for record in jobs.itertuples():
             m,constant=counters[(record.N,record.k)]
             if m!=record.M:raise ValueError('Validity audit disagrees with original embedding M')
-            rows.append(dict(seed=seed,N=record.N,k=record.k,M_core=m,constant_history_rows=constant,
-                constant_fraction=constant/m,nonconstant_rows=m-constant))
+            rows.append(dict(seed=seed,N=record.N,k=record.k,window_filter=record.window_filter,M_core=m,constant_history_rows=constant,
+                constant_fraction=constant/m if m else 0.,nonconstant_rows=m-constant))
     return pd.DataFrame(rows)
 
 
 def analyze(out):
     out=Path(out);groups=sorted((out/'groups').glob('seed_*'))
+    from model import WINDOW_FILTER
+    from runtime import file_hash
+    protocol=json.loads((out/'protocol.json').read_text())
+    if protocol['design'].get('window_filter')!=WINDOW_FILTER or protocol['design']['version']!=4:
+        raise ValueError('Results use an outdated E2 protocol/window filter')
     frames=[];match_frames=[];runtime=[];early=[];availability=[]
     for folder in groups:
         if not (folder/'complete.json').exists():raise ValueError('Incomplete group')
-        frames.append(pd.read_csv(folder/'forecasts.csv.gz'))
-        match_frames.append(pd.read_csv(folder/'matches.csv.gz'))
+        completion=json.loads((folder/'complete.json').read_text())
+        for name,digest in completion['sha256'].items():
+            if file_hash(folder/name)!=digest:raise ValueError('Modified E2 group artifact')
         info=json.loads((folder/'runtime.json').read_text())
+        if info.get('window_filter')!=WINDOW_FILTER or info.get('constant_history_rows')!=0:
+            raise ValueError('Results use an outdated filter or retain constant histories')
+        if any(protocol['source_sha256'].get(name)!=digest for name,digest in info.get('source_sha256',{}).items()) or not info.get('source_sha256'):
+            raise ValueError('E2 group numerical source differs from protocol')
+        if info.get('context_sha256')!=file_hash(out/'contexts.npz'):raise ValueError('E2 group used different contexts')
+        frames.append(pd.read_csv(folder/'forecasts.csv.gz',float_precision='round_trip'))
+        match_frames.append(pd.read_csv(folder/'matches.csv.gz',float_precision='round_trip'))
         for m,details in info['per_m'].items():
             runtime.append(dict(seed=info['seed'],N=info['N'],k=info['k'],m=int(m),
                 **{key:value for key,value in info.items() if key not in ['seed','N','k','per_m']},**details))
@@ -152,6 +172,7 @@ def analyze(out):
     if median_decreases:raise ValueError('Increasing nearest-neighbor prefixes reduced median distance')
     performance=pd.DataFrame(runtime)
     validity=segment_validity_audit(out,performance)
+    if validity.constant_history_rows.any():raise ValueError('Nonconstant filter retained constant windows')
     validity.to_csv(out/'segment_validity_audit.csv',index=False)
     context=json.loads((out/'context_metadata.json').read_text())
     performance['estimated_core_case_seconds']=performance.query_benchmark_mean_seconds+performance.aggregation_seconds/performance.cases+context['smoothing_seconds']/context['cases']
@@ -171,14 +192,19 @@ def analyze(out):
         ('early_metrics',early_metrics),('early_availability',availability_summary),('generation',pd.DataFrame(generation))]:
         frame.to_csv(out/f'{name}.csv',index=False)
     # Keep original child artifacts as auditable per-target and per-case records.
-    validation=dict(main_targets=len(data),configurations=len(summary),seeds=3,nested_queries=len(monotonic),
+    validation=dict(protocol_version=4,window_filter=WINDOW_FILTER,constant_history_rows=int(validity.constant_history_rows.sum()),
+        protocol_sha256=file_hash(out/'protocol.json'),source_sha256=protocol['source_sha256'],
+        main_targets=len(data),configurations=len(summary),seeds=3,nested_queries=len(monotonic),
         minimum_distance_increase_violations=violations,matching_M_min=int(performance.M.min()),
         median_distance_decrease_with_m_violations=median_decreases,
         max_requested_m=8000,early_targets=len(early_data),early_unavailable_cases=int(availability_data.status.ne('ok').sum()))
     validation['constant_history_rows_reference_seed0']=int(validity.loc[validity.seed.eq(0)&validity.N.eq(18387)&validity.k.eq(5),'constant_history_rows'].iloc[0])
     # Seed zero reference must reproduce the audited Experiment 4 point forecasts.
     reference_path=out.parent/'experiment_4_omit/instances.csv'
-    if reference_path.exists():
+    reference_meta=reference_path.with_name('protocol.json')
+    reference_compatible=(reference_meta.exists() and json.loads(reference_meta.read_text()).get('source_sha256',{}).get('experiments/forecasting/model.py')
+                          ==protocol['source_sha256']['experiments/forecasting/model.py'])
+    if reference_path.exists() and reference_compatible:
         original=pd.read_csv(reference_path)
         reference=data.loc[data.seed.eq(0)&data.N.eq(18387)&data.k.eq(5)&data.m.eq(4422)]
         joined=reference.merge(original,on=TARGETS,validate='one_to_one',suffixes=('_e2','_e4'))
@@ -191,7 +217,7 @@ def analyze(out):
     fig,ax=plt.subplots(figsize=(8,4))
     ax.bar(selected.index,selected.nonconstant_rows/1e6,label='Nonconstant history')
     ax.bar(selected.index,selected.constant_history_rows/1e6,bottom=selected.nonconstant_rows/1e6,label='Constant history retained by float variance')
-    ax.set(xticks=selected.index,xlabel='k',ylabel='Million rows; mean across seeds',title='Numerical validity audit of unchanged core; N=18387');ax.legend(fontsize=8)
+    ax.set(xticks=selected.index,xlabel='k',ylabel='Million rows; mean across seeds',title='nonconstant_v2 validity audit; N=18387');ax.legend(fontsize=8)
     fig.tight_layout()
     for ext in ['png','svg']:fig.savefig(out/'figures'/f'10_segment_validity.{ext}',dpi=150,bbox_inches='tight')
     plt.close(fig)
@@ -298,8 +324,8 @@ def write_report(out,summary,runtime,matching,effects,validation):
     reference=summary.loc[summary.N.eq(18387)&summary.k.eq(5)&summary.m.eq(4422)].iloc[0]
     lines=['# Experiment 2 — Individual sensitivity, interactions and trade-offs','',
         f'{len(summary)} configurations ×3 independent training banks ×10.000 common COVID targets = {len(summary)*30000:,} point forecasts. GAM, exact L1, omit bridge; no BO or UQ rerun. The calendar is unchanged from Experiment 4.',
-        '', 'N=22000 and N=30000 were added after the initial study at user request. Original libraries/forecasts and protocols are preserved; effective_protocol.json links the latest explicit amendment. Each added N requires only three new (N,5,4422) seed runs.',
-        '',f"Reference (18387,5,4422): mean MAE {reference.MAE:,.2f}, seed SD {reference.MAE_seed_sd:,.2f}. Seed 0 reproduces the existing Python reference bank and Experiment 4.",
+        '', 'Protocol v4, nonconstant_v2: exactly constant histories retained = 0. N=22000 and N=30000 remain the user-requested levels from the earlier study. Existing banks/prefixes are hash-verified and reused; forecasts are recomputed, not imported from v1. No levels are chosen again from COVID errors.',
+        '',f"Reference (18387,5,4422): mean MAE {reference.MAE:,.2f}, seed SD {reference.MAE_seed_sd:,.2f}. E4 equality is checked only when its numerical source matches; a legacy E4 run is not a correctness oracle for the new filter.",
         '', '## E2.A — Individual sensitivity','',
         'Each row changes one parameter; all other reference parameters remain fixed. Error bars show SD across three training seeds, not a confidence interval. COVID results are descriptive, not selection feedback.','']
     for parameter in PARAMS:
@@ -330,7 +356,7 @@ def write_report(out,summary,runtime,matching,effects,validation):
         '', '## Limits','',
         '- N is attempts per family; seasonal rejections are retained and never replaced. All seed-level banks have the same largest-N family namespace; nested subsets select attempt indices, not first N accepted curves.',
         '- k changes both required history and the number of valid segments M. No equal-M ablation is performed; both N and M are exported.',
-        f"- Numerical core audit: seed0 reference retains {validation['constant_history_rows_reference_seed0']:,} exactly constant-history windows because np.var can be tiny positive rather than zero. segment_validity_audit.csv reports this for every N/k/seed. Predictions deliberately preserve the existing core for comparability; k effects therefore include its numerical validity behavior, not just window length. A strict constant-filter ablation would be a separate implementation study.",
+        f"- Numerical core audit: seed0 reference retains {validation['constant_history_rows_reference_seed0']:,} exactly constant-history windows. segment_validity_audit.csv records the filter for each N/k/seed: legacy numpy_variance_v1 may retain constant rows due to rounding; nonconstant_v2 excludes them exactly. Existing predictions are never relabelled as corrected runs. k effects also include the recorded filter's behavior.",
         '- Common main origins have >=10 observations. Short-history results are separate and must only compare supported k within the same L.',
         '- Population, wave phase and reporting zeros remain as in the fixed panel. This study does not repair data, infer causal parameter effects, or prove numerical equivalence with R/mgcv.',
         '- RMSE in summary.csv is the mean of seed-specific RMSE; per-seed/horizon metrics are available separately. Three seeds give limited stability evidence.','']

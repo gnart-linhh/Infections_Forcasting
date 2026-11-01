@@ -59,7 +59,13 @@ def thin_plate_gcv(values, basis_size=None, return_info=False):
         return n * rss / residual_df ** 2, shrink, n-residual_df
 
     grid = np.linspace(-30, 30, 121)
-    objectives = [fit(x)[0] for x in grid]
+    # Evaluate the same grid in one array operation. Each row uses exactly the
+    # scalar fit's reduction order; candidate refinement and tie policy stay put.
+    product = np.exp(grid)[:, None] * penalty
+    loss = product / (1 + product)
+    rss = (0. if n==k else residual_ss) + np.sum((loss * coefficients) ** 2, axis=1)
+    residual_df = n-k + loss.sum(axis=1)
+    objectives = n * rss / residual_df ** 2
     candidates = [(-30., objectives[0]), (30., objectives[-1])]
     for i in range(1, len(grid)-1):
         if objectives[i] <= objectives[i-1] and objectives[i] <= objectives[i+1]:

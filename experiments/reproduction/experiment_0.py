@@ -81,7 +81,7 @@ def select_examples(prediction_dir, selected_dir, origins):
 
 def run_early(full_run, manifest_path, data, out):
     """Replay figure_2.R, including its explicit retrospective UQ convention."""
-    from model import forecast
+    from model import forecast, WINDOW_FILTER
     from prediction import predict_origin
     from smoothing import thin_plate_gcv
     manifest=pd.read_csv(manifest_path,keep_default_na=False).set_index('series')
@@ -93,7 +93,7 @@ def run_early(full_run, manifest_path, data, out):
     if file_hash(library)!=generation['curves_sha256']: raise ValueError('Library checksum mismatch')
     if not (data/'provenance.json').exists():
         raise ValueError('Run experiments/data/fetch_paper_data.py first; no final-truth fallback')
-    protocol=dict(name='figure2_source_v2',published_params=PUBLISHED,seed=13,
+    protocol=dict(name='figure2_source_v3',published_params=PUBLISHED,seed=13,window_filter=WINDOW_FILTER,
         history='Frozen JHU issue 2020-08-16, labelled 2020-08-15 by LANL',
         smoothing='Gaussian thin plate regression spline; k=max(3,round(n/2)); GCV',
         embedding='figure_2.R diff(y), omit bridge',initial_sizes=FIGURE2_INITIAL_SIZES,

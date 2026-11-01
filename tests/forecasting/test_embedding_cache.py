@@ -20,6 +20,16 @@ from run_full import compare_runs
 
 
 class FullRunTests(unittest.TestCase):
+    def test_legacy_cache_rejected_without_rewriting_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);source=root/'curves.csv';source.write_text('curve_id,step,value\n')
+            cache=root/'cache';cache.mkdir();metadata=cache/'metadata.json'
+            original='{"version":1,"rows":123}'
+            metadata.write_text(original)
+            with self.assertRaisesRegex(ValueError,'new cache directory'):
+                load_cached_library(source,cache,5,4)
+            self.assertEqual(metadata.read_text(),original)
+
     def test_disk_embeddings_keep_every_curve_and_window_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'curves.csv'

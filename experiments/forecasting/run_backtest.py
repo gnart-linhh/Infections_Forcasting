@@ -11,7 +11,7 @@ import platform
 import sys
 import numpy as np
 import scipy
-from model import load_library, forecast
+from model import load_library, forecast, WINDOW_FILTER
 from uncertainty import QUANTILES, scores, calibration_plan, coverage_rows
 from prediction import predict_origin
 from selection import apply_selection
@@ -185,12 +185,12 @@ def run_experiment(a, embeddings=None, neighbor_index=None):
                     result[prefix+metric] = float(np.mean([r[prefix+metric] for r in rows]))
         return result
     summary = dict(series=a.series, origins=len(origins), warmup_origins=len(warmup),
-                   history_mode='as_of' if snapshots else 'final', embedding_rows=len(x),
+                   history_mode='as_of' if snapshots else 'final', embedding_rows=len(x),window_filter=WINDOW_FILTER,
                    scored_start=dates[origins[0]].isoformat(), scored_end=dates[origins[-1]].isoformat(),
                    closest_used=min(a.closest, len(x)), overall=stats(records),
                    by_horizon={str(j): stats([r for r in records if r['horizon']==j]) for j in range(1, a.h+1)})
     metadata = dict(config={k: str(v) if isinstance(v, (Path, date)) else v for k,v in vars(a).items()},
-        python=platform.python_version(), numpy=np.__version__, scipy=scipy.__version__,
+        window_filter=WINDOW_FILTER, python=platform.python_version(), numpy=np.__version__, scipy=scipy.__version__,
         sha256={str(path): file_hash(path) for path in
                 [a.synthetic, a.truth, Path(__file__), Path(__file__).with_name('model.py'),
                  Path(__file__).with_name('uncertainty.py'), Path(__file__).with_name('snapshots.py'),

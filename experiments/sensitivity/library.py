@@ -10,9 +10,51 @@ import numpy as np
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'experiments'))
 sys.path.insert(0,str(ROOT/'experiments/synthetic'))
+sys.path.insert(0,str(ROOT/'experiments/forecasting'))
 from generator import SyntheticCurve
+from model import valid_history_windows
 from bank import FAMILIES,save_packed,load_packed
 from runtime import atomic_json,file_hash
+
+
+def reuse_banks(source,out,levels=(18387,22000,30000),seeds=(0,1,2)):
+    """Verify immutable banks/prefixes and link them; never copy CSVs or forecasts."""
+    source=Path(source).resolve();out=Path(out).resolve()
+    if source==out:raise ValueError('Reproduction needs a fresh output directory')
+    hashes={};verified=[]
+    for seed in seeds:
+        previous=None;old_attempts=None
+        for i,n in enumerate(levels):
+            relative=Path(f'packed/seed_{seed}') if i==0 else Path(f'amendments/N{n}/packed/seed_{seed}')
+            packed=source/relative;meta=json.loads((packed/'metadata.json').read_text())
+            files={'curves.npz':meta['packed_sha256'],'attempts.npz':meta['attempts_sha256']} if i==0 else meta['sha256']
+            if meta['attempts']!=3*n:raise ValueError('Bank budget differs')
+            if (meta['seed_offset'] if i==0 else meta['config']['seed_offset'])!=seed*1000000:raise ValueError('Bank seed differs')
+            for name in ['metadata.json',*files]:
+                digest=file_hash(packed/name)
+                if name in files and digest!=files[name]:raise ValueError('Modified reused bank: '+str(packed/name))
+                hashes[str((packed/name).resolve())]=digest
+            if i==0:
+                csv=Path(meta['source']);digest=file_hash(csv)
+                if digest!=meta['source_sha256']:raise ValueError('Modified original bank CSV')
+                hashes[str(csv.resolve())]=digest
+            current=load_packed(packed/'curves.npz')
+            with np.load(packed/'attempts.npz',allow_pickle=False) as data:attempts={k:data[k].copy() for k in data.files}
+            if len(current)!=meta['accepted'] or len(current)!=len(attempts['index']) or (attempts['index']>=n).any():raise ValueError('Invalid reused bank')
+            if previous is not None:
+                if meta['config']['base_n']!=levels[i-1] or not meta['original_prefix_verified']:raise ValueError('Incorrect extension chain')
+                for key,values in old_attempts.items():
+                    if not np.array_equal(attempts[key][:len(values)],values):raise ValueError('Extension changed attempt identities')
+                for before,after in zip(previous,current):
+                    if not np.array_equal(before.ts,after.ts) or (before.curve_type,before.scale,before.time_cadence,before.seasonal)!=(after.curve_type,after.scale,after.time_cadence,after.seasonal):
+                        raise ValueError('Extension changed a prefix curve')
+            dest=out/relative;dest.parent.mkdir(parents=True,exist_ok=True)
+            if dest.exists() or dest.is_symlink():
+                if not dest.is_symlink() or dest.resolve()!=packed.resolve():raise ValueError('Bank link differs')
+            else:dest.symlink_to(packed,target_is_directory=True)
+            verified.append(dict(seed=seed,N=n,accepted=len(current),source=str(packed),prefix_verified=i>0))
+            previous=current;old_attempts=attempts
+    return dict(root=str(source),banks=verified,sha256=hashes)
 
 
 def pack_bank(source,out,offset,max_n=18387,replay=None):
@@ -84,7 +126,7 @@ def embed(curves,curve_ids,k,scratch,h=4):
             values=np.maximum(curve.ts,1e-8);width=k+h+2
             if len(values)<width:continue
             windows=np.lib.stride_tricks.sliding_window_view(values,width)
-            valid=np.var(windows[:,:k+1],axis=1,ddof=1)>0
+            valid=valid_history_windows(windows[:,:k+1])
             differences=np.diff(windows[valid],axis=1)
             np.ascontiguousarray(differences[:,:k],dtype='<f8').tofile(xf)
             np.ascontiguousarray(differences[:,k+1:],dtype='<f8').tofile(yf)

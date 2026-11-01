@@ -1,6 +1,10 @@
 """Prespecified Experiment 2 design, independent of observed forecast errors."""
 from itertools import product
+from pathlib import Path
+import sys
 import pandas as pd
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'forecasting'))
+from model import WINDOW_FILTER
 
 REFERENCE=(18387,5,4422)
 LEVELS={'N':[500,2000,5000,10000,18387,22000,30000],'k':[3,5,7,9],'m':[100,500,2000,4422,8000]}
@@ -27,7 +31,7 @@ def configurations():
 
 
 def protocol():
-    return dict(experiment='E2 parameter sensitivity',version=3,reference=dict(zip(['N','k','m'],REFERENCE)),
+    return dict(experiment='E2 parameter sensitivity',version=4,window_filter=WINDOW_FILTER,reference=dict(zip(['N','k','m'],REFERENCE)),
         configurations=configurations().to_dict('records'),seeds=SEEDS,seed_offsets={str(k):v for k,v in SEED_OFFSETS.items()},
         N_definition='attempts per generator, not accepted curves; no rejection replacement',
         nesting='original 18387-attempt family namespaces remain fixed; larger banks append independently seeded attempts without regenerating original curves',

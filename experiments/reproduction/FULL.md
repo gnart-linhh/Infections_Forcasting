@@ -1,114 +1,113 @@
 # Full weekly COVID run — paper parameters, then BO winner
 
-Run paper: `outputs/paper_full/`. Giữ **N=18.387 attempts/family, k=5,
-m=4.422**, GAM/GCV. Tái dùng synthetic Python đầy đủ và kiểm SHA256: 55.161
-attempts, 54.081 accepted curves. Không chạy lại BO hoặc gắn nhãn bộ paper là
-winner BO Python. BO ở `outputs/bo_gam/` đã hoàn tất 104 evaluations; winner
-N=29.357, k=7, m=5.167 được chạy lại với cùng quy ước mới.
+Full mặc định dùng **UQ matured theo nhánh chính `run_smoa.R`**, giữ
+**N=18.387 attempts/family, k=5, m=4.422**, GAM/GCV và **omit bridge** theo yêu cầu trước.
+Bản hồi cứu đã hoàn tất nằm riêng ở `outputs/paper_full_nonconstant_v2/`;
+không thay các scores của nó bằng scores từ policy mới.
 
-**Quy ước full hiện tại:** bỏ bridge difference và dùng **UQ hồi cứu**, kể cả
-outcomes của targets chưa đến hạn trong các forecasts đã phát trước đó.
-Chỉ sinh/calibrate/đánh giá/vẽ **sMOA**. Hai bộ paper và BO là hai cấu hình
-tham số của cùng mô hình sMOA.
-[Run paper hiện hành đã hoàn tất](#results): MAE 7.384,66, WIS 4.727,47.
-Run winner BO cũng đã hoàn tất: MAE 7.443,16, WIS 4.734,66; bảng ghép targets
-ở `outputs/bo_gam_full/paper_comparison/` và trong notebook.
-Run giữ bridge/matured trước đó được lưu riêng ở `outputs/paper_full_bridge_matured/`;
-run winner cũ đang dở ở `outputs/bo_gam_full_bridge_matured_partial/`.
+## Đối chiếu UQ với R
 
-## Phạm vi full
+README nguồn gọi `run_smoa.R`. Tại commit
+`aba1948d228e5380d72907048236601874b53cac`,
+[main script dòng 253](https://github.com/lanl/precog/blob/aba1948d228e5380d72907048236601874b53cac/smoa/R/run_smoa.R#L253)
+lọc `target_end_date <= curr_targetend_date` trước MLE riêng từng horizon.
+[Figure 2 dòng 238](https://github.com/lanl/precog/blob/aba1948d228e5380d72907048236601874b53cac/smoa/R/figure_2.R#L238)
+fit trực tiếp toàn bộ earlier-issued forecast rows, không lọc maturity.
+Vì vậy full dùng `matured`; `experiment_0` giữ `figure2_retrospective` để
+đối chiếu Figure 2. Policy hồi cứu chỉ chạy khi chỉ định rõ.
 
-**50 bang × 112 origins hàng tuần × 4 horizons = 22.400 targets/model.**
-Origins từ 15/08/2020 đến 01/10/2022; targets có thể tới 29/10/2022.
-Đây là toàn bộ lịch tuần trong cửa sổ chung có đủ bốn future labels cho cả
-50 bang, không subsample 50 origins như Experiment 4. Arizona có truth kéo
-dài riêng tới 2023; các tuần chỉ Arizona có dữ liệu không thuộc test chung.
+Chỉ thay UQ eligibility. Bridge vẫn omit theo yêu cầu trước, trong khi main R
+keep bridge: **chưa gọi toàn bộ full là replay nguyên trạng main R**. Quy tắc
+UQ và initialization `[20,10,6,0.3]` khớp nhánh main.
 
-`outputs/paper_weekly_archive/` chứa snapshot JHU cho mọi origin, URL commit
-bất biến và checksums, lấy từ index chính thức `reichlab/covidData`. Tái dùng
-raw cache đã tải; tải bổ sung các vintage thiếu. County cumulative → daily
-differences → Sunday–Saturday state weekly sums. Saturday là tuần quan sát
-cuối, cutoff dữ liệu Sunday `origin+1`, issuance Monday, theo code LANL.
-Không thay snapshot thiếu bằng final truth. Final raw truth dùng chấm điểm.
+- MLE chỉ nhận earlier-issued rows có target date ≤ origin; current-issued forecasts không vào prior.
+- Source chuyển MLE sau 24 stored rows, không đòi sáu mature labels mỗi horizon.
+- Giữ NB mean<100 rule, 5.000 draws, seed13, median recentering, 23 quantiles/11 levels; WIS trên bảy quantiles nguồn.
+- R dùng final truth cho labels hiệu chỉnh và warmup từ snapshot cố định 15/08/2020. Python giữ cả hai để đối chiếu nguồn. `matured` **không tự làm cả pipeline causal**, vì revisions và frozen warmup vẫn hồi cứu.
+- Point forecasts, matching và MAE không phụ thuộc policy UQ; WIS, dispersion và coverage phải tính lại.
 
-## UQ và phương pháp
+## Trạng thái các lượt nonconstant_v2
 
-- Gaussian thin plate GAM/GCV, exact L1 matching, median `diff(y)` **bỏ bridge**.
-  Dùng h+1 future levels để lấy đủ h=4 differences, như embedding Figure 2.
-- NB initialization sizes `[20,10,6,0.3]`; sau warmup dùng MLE riêng cho mỗi
-  horizon trên mọi forecast **đã phát trước origin**, kể cả khi
-  `target_end_date > origin`, với final outcomes có sẵn trong dữ liệu hồi cứu.
-- Calibration dùng final truth kể cả target chưa mature theo policy hồi cứu;
-  prehistory trước 15/08/2020 tính từ snapshot cố định ngày 15/08. **Cả UQ và
-  warmup đều hồi cứu**; không gọi WIS/coverage là kết quả real-time. Không replay bản
-  ghi first-origin bị lặp trong upstream; negative outcomes loại khỏi NB
-  likelihood và ghi số lượng, giữ nguyên trong evaluation.
-- Chỉ thay bridge và eligibility UQ theo yêu cầu; NB initialization vẫn là
-  `[20,10,6,0.3]` của main runner, không đổi sang initialization riêng của Figure 2.
-  `calibration.csv` ghi `calibration_policy` và `future_calibration_n` để kiểm chứng.
-- 5.000 NB draws/horizon, seed 13, median recentering; 23 quantiles/11 coverage
-  levels, WIS trên 7 quantiles như helper gốc.
-- Chạy một luồng BLAS, dùng disk-backed embedding đầy đủ. Mọi neighbor match
-  vẫn lưu curve ID/window start/distance; ghi dần ra **matches.csv.gz** nén
-  lossless để giảm RAM và dung lượng đĩa, không giảm số neighbors.
+- Paper: `outputs/paper_full_nonconstant_v2_matured/`, đã complete đủ 22.400 targets.
+- BO vẫn chạy nguyên: `outputs/bo_gam_nonconstant_v2/02_optimization/`, 99 LHS +5 EI, GAM, all validation origins, 4 workers. BO tối ưu point-MAE, không dùng NB/UQ, nên không restart vì đổi policy này.
+- Full winner tự chờ: `outputs/bo_gam_full_nonconstant_v2_matured/`.
+- Lịch chờ winner hồi cứu cũ đã được đánh dấu superseded, không chạy tiếp.
+- Mỗi job có `launch.json`, PID và resume command. Hai full dùng cùng source snapshot tại `outputs/paper_full_nonconstant_v2_matured/source_snapshot/`.
 
-Run này dùng Python core của repo. RNG/Monte Carlo/GAM optimizer có thể khác
-R; chưa khẳng định numerical parity, khớp toàn bộ figures hay ranking các
-external models của paper. Các outputs legacy không được đổi nhãn thành run mới.
+[full.ipynb](full.ipynb) đọc các thư mục matured mới. Khi chưa complete chỉ
+xem trạng thái/artifacts hiện có; không trình bày scores hồi cứu như kết quả mới.
 
-## Chạy và xem tiến độ
+## Phạm vi và dữ liệu
+
+**50 bang ×112 origins hàng tuần ×4 horizons =22.400 targets/model**.
+Origins 15/08/2020–01/10/2022; targets tới 29/10/2022. Tất cả 112 JHU vintages
+đã chuẩn bị ở `outputs/paper_weekly_archive/`; không fallback sang final history.
+Dùng raw final truth để scoring. Synthetic Python không sinh lại: 55.161
+attempts, 54.081 accepted curves, checksum được kiểm chứng. Bộ lọc
+`nonconstant_v2` giữ 12.921.078 omit windows ở k=5,h=4.
+
+Chỉ sinh/calibrate/đánh giá/vẽ sMOA, đủ 1–4 week-ahead forecasts, MAE/WIS và
+prediction intervals. Matches lưu lossless trong `matches.csv.gz`.
+
+## Chạy và theo dõi
 
 ```bash
-.venv/bin/python -u experiments/data/prepare_weekly_archive.py
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
-  .venv/bin/python -u experiments/reproduction/run_full.py \
-  --embedding-cache outputs/paper_embedding_k5_h4_omit
-.venv/bin/python experiments/status.py --output-dir outputs/paper_full
+.venv/bin/python experiments/status.py --output-dir outputs/paper_full_nonconstant_v2_matured
+.venv/bin/python experiments/status.py --output-dir outputs/bo_gam_nonconstant_v2
+.venv/bin/python experiments/status.py --output-dir outputs/bo_gam_full_nonconstant_v2_matured
 ```
 
-Thêm `--resume` để tiếp tục cùng inputs/source/config. Source đang chạy được
-đóng băng trong `source_snapshot/`; command resume chính xác trong `launch.json`.
-Notebook [full.ipynb](full.ipynb) đọc tiến độ, MAE/WIS và hình từ outputs thật.
-
-Output `paper_full/`: `run.log`, `pipeline.json`, `run_config.json`,
-`03_uq/policy.json`, `04_prediction/01..50/`, `05_evaluation/report.md`,
-`scores.csv`, `coverage.csv`, `series_metrics.csv` và hình PNG/SVG từng bang.
-Chỉ hoàn tất khi `pipeline.json` có `status=complete`, đủ 22.400 targets/model.
-
-Đợt loại diagnostic model dùng `--reuse-predictions-from` để giữ nguyên từng
-giá trị sMOA đã phát, không refit hoặc resample NB. Quy tắc số học UQ và source
-model/embedding được kiểm tra trước khi reuse; provenance trỏ tới generation
-metadata gốc. Evaluation và mọi hình được dựng lại chỉ cho sMOA. Các lần chạy
-mới không dùng tùy chọn reuse sẽ sinh trực tiếp sMOA-only. Không tính thời gian
-xử lý/lọc này thành một lần inference mới.
-
-## Chạy lại khi BO hiện tại hoàn tất
-
-Driver chờ run paper hoàn tất, sau đó dùng đúng bank/k/m của
-winner trên cùng archive, lịch, seed, UQ/scoring và phần mềm:
+Các job đã khởi chạy, không chạy thêm lần trùng. Khi cần tiếp tục, dùng đúng
+`resume_command` trong launch.json để giữ frozen source và config.
+Ví dụ cho một lượt mới với cùng policy:
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
   .venv/bin/python -u experiments/reproduction/run_full.py \
-  --selection-dir outputs/bo_gam/02_optimization --wait-for-selection \
-  --paper-run outputs/paper_full --output-dir outputs/bo_gam_full
-.venv/bin/python experiments/status.py --output-dir outputs/bo_gam_full
+  --uq-policy matured --bridge-mode omit \
+  --embedding-cache outputs/paper_embedding_k5_h4_omit_nonconstant_v2 \
+  --output-dir outputs/paper_full_nonconstant_v2_matured
 ```
 
-`waiting_for_bo`/`waiting_for_paper` là đang chờ; chưa có kết quả COVID của winner. Driver
-không chọn incumbent tạm thời; chỉ dùng selection đã complete, đúng artifact
-hashes và GAM. Nếu BO/paper lỗi thì dừng với trạng thái blocked. Khi chạy xong,
-`bo_gam_full/paper_comparison/` có MAE/WIS trên targets ghép chính xác và theo
-horizon; không so hai aggregate trên các test khác nhau. BO tối ưu synthetic
-validation nên không đảm bảo thắng bộ paper trên dữ liệu COVID thật.
+Sau khi BO complete, driver winner dùng cùng UQ matured, archive, lịch,
+software, seeds và raw labels. `paper_comparison/` ghép đúng từng target;
+không so aggregate giữa các protocols khác nhau. BO tối ưu synthetic validation,
+không bảo đảm thắng cấu hình paper trên COVID.
+
+Source/RNG/GAM/NB của Python chưa có numerical parity hoàn toàn với R;
+[REPRODUCTION_AUDIT.md](../../REPRODUCTION_AUDIT.md) ghi các khác biệt còn lại.
+
+## Kết quả matured — đối chiếu UQ chính trong R
+
+Đã hoàn tất dự báo **50 bang /22.400 targets** với `nonconstant_v2`, omit bridge,
+UQ matured. Full source reproduction vẫn có các khác biệt bridge/RNG/GAM và
+warmup/revisions đã khai báo ở trên.
+
+| Metric | Hồi cứu Figure 2 (`paper_full_nonconstant_v2`) | Matured main R (`paper_full_nonconstant_v2_matured`) |
+| --- | ---: | ---: |
+| MAE | 7.384,66 | 7.384,66 |
+| WIS | 4.727,47 | 4.747,38 |
+| Coverage 95%, lower-open như R | 87,33% | 87,17% |
+
+Kiểm tra độc lập toàn bộ **22.400 calibration counts** bằng timestamp của
+issued/target pairs; không dùng target chưa đến hạn. Fit lại **600 NB sizes**
+(ba origins ×bốn horizons ×50 bang) trên đúng matured pairs cho kết quả khớp.
+`predictions.csv` của cả 50 bang giống byte-for-byte với bản v2 hồi cứu;
+parameters, library hash, raw-truth hashes và origins giống nhau. Thay policy
+chỉ ảnh hưởng UQ/WIS/coverage trong phép đối chiếu này.
+
+Nguồn số: `04_prediction/summary.json`, `calibration.csv`,
+`warmup_forecasts.csv`, `forecasts.csv` và `predictions.csv` từng bang.
+Pipeline đã complete; đủ 50 báo cáo bang và hình tại `05_evaluation/`.
+53 forecasting tests pass, gồm kiểm tra default matured và future-label perturbation.
 
 <a id="results"></a>
 
-## Kết quả full hiện hành
+## Kết quả hồi cứu đã lưu — không phải UQ mặc định hiện tại
 
-Run paper hoàn tất 30/10/2026 22:40 giờ Việt Nam. Output hiện hành: `outputs/paper_full/`.
+Run paper hoàn tất 30/10/2026 22:40 giờ Việt Nam. Output lịch sử: `outputs/paper_full/`.
 
-**Quy ước hiện hành theo yêu cầu:** `bridge_mode=omit`, `uq_policy=figure2_retrospective`.
+**Quy ước của bảng kết quả lịch sử này:** `bridge_mode=omit`, `uq_policy=figure2_retrospective`.
 UQ dùng final outcomes của các forecasts đã phát trước đó, kể cả targets chưa đến hạn. Đây là kết quả **hồi cứu, có future labels trong UQ**, không phải đánh giá real-time causal.
 
 ### Bộ paper — chỉ sMOA

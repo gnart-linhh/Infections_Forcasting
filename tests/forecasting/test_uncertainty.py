@@ -11,6 +11,29 @@ from uncertainty import dispersion, fit_size, interval_quantiles, scores
 
 
 class UncertaintyTests(unittest.TestCase):
+    def test_source_coverage_excludes_lower_and_includes_upper_endpoint(self):
+        q=np.arange(7,dtype=float)
+        for level,lower,upper in [(50,2,4),(80,1,5),(95,0,6)]:
+            self.assertEqual(scores(q,lower)[f'coverage_{level}'],0)
+            self.assertEqual(scores(q,upper)[f'coverage_{level}'],1)
+
+    def test_nb_small_mean_rule_has_strict_100_boundary(self):
+        self.assertEqual(fit_size([99.999999],[1000]),fit_size([1000],[1000]))
+        self.assertLess(fit_size([100],[1000]),fit_size([99.999999],[1000]))
+
+    def test_global_warmup_threshold_and_target_date_boundary(self):
+        prior=[dict(horizon=h,target_end_date='2020-02-01',forecast=1000.,true_value=1200.)
+               for _ in range(6) for h in range(1,5)]
+        self.assertEqual(dispersion(prior[:-1],'2020-02-01',1)[1],'initial')
+        self.assertEqual(dispersion(prior,'2020-02-01',1)[1:2],('mle',))
+        self.assertEqual(dispersion(prior,'2020-01-31',1),(20.,'initial',0))
+        self.assertEqual(dispersion(prior,'2020-01-31',1,policy='figure2_retrospective')[1:],('mle',6))
+        # Six origins is a global row count, not six mature labels per horizon.
+        for r in prior:
+            if r['horizon']==4:r['target_end_date']='2020-03-01'
+        prior[-1]['target_end_date']='2020-02-01'
+        self.assertEqual(dispersion(prior,'2020-02-01',4)[1:],('mle',1))
+
     def test_wis_matches_weighted_interval_formula(self):
         q = np.array([1,2,3,4,5,6,7], dtype=float)
         actual = 8

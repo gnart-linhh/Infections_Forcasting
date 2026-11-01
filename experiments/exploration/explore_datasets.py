@@ -20,7 +20,7 @@ import scipy
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'experiments'))
 from runtime import acquire_run_lock,atomic_json,file_hash
-from synthetic_eda import FAMILIES,PEAK_RULE,scan_library
+from synthetic_eda import FAMILIES,PEAK_RULE,scan_library,WINDOW_FILTER
 from real_world_eda import RULES,load_truth,distributions,weekly_changes,periods,real_peaks,compare_vintages,revision_tables,revision_summary
 
 COLORS=['#2563a6','#df8430','#309077','#9957a5']
@@ -196,7 +196,7 @@ def run_exploration(synthetic_path,manifest_path,output_dir,k=5,h=4,archive_dir=
     summary=dict(synthetic=dict(curves=len(curves),observations=int(curves.observations.sum()),
         families=curves.curve_type.value_counts().to_dict(),attempts=gen.get('attempted_total'),accepted=gen.get('accepted_total'),
         embedding_windows_keep=int(curves.embedding_windows_keep.sum()),embedding_windows_omit=int(curves.embedding_windows_omit.sum()),
-        peak_rule=PEAK_RULE,k=k,h=h),
+        peak_rule=PEAK_RULE,k=k,h=h,window_filter=WINDOW_FILTER),
         real_world=dict(states=truth.series.nunique(),source_records=len(truth),common_records=len(common),
         common_start=str(common.target_end_date.min().date()),common_end=str(common.target_end_date.max().date()),
         negative_values=int(common.value.lt(0).sum()),zeros=int(common.value.eq(0).sum()),sharp_events=len(sharp),
@@ -207,9 +207,9 @@ def run_exploration(synthetic_path,manifest_path,output_dir,k=5,h=4,archive_dir=
     source_paths=[Path(synthetic_path),Path(manifest_path),population,generation,archive_dir/'manifest.csv',archive_dir/'provenance.json',
                   *[Path(manifest_path).parent/r.truth for r in manifest.itertuples()],
                   *[archive_dir/r.as_of_truth for r in pd.read_csv(archive_dir/'manifest.csv').itertuples()],
-                  *Path(__file__).parent.glob('*.py')]
+                  ROOT/'experiments/forecasting/model.py',*Path(__file__).parent.glob('*.py')]
     atomic_json(output_dir/'metadata.json',dict(completed_utc=datetime.now(timezone.utc).isoformat(),
-        python=platform.python_version(),packages=dict(numpy=np.__version__,pandas=pd.__version__,scipy=scipy.__version__,matplotlib=matplotlib.__version__),
+        window_filter=WINDOW_FILTER,python=platform.python_version(),packages=dict(numpy=np.__version__,pandas=pd.__version__,scipy=scipy.__version__,matplotlib=matplotlib.__version__),
         sha256={str(p.resolve()):file_hash(p) for p in source_paths if p.exists()},
         population_source='LANL/precog smoa/data/state_census.csv, POPESTIMATE2019; fixed denominator, not annual population',
         scope='Full library statistics; only example curves are sampled. Common calendar for state/region comparisons. No forecasting or tuning.'))

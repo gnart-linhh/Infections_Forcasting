@@ -10,13 +10,22 @@ import numpy as np
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'experiments/forecasting'))
+sys.path.insert(0,str(ROOT/'experiments/reproduction'))
 from embedding_cache import load_cached_library
 from model import forecast,load_library
 from run_backtest import parser,run_experiment
 from uncertainty import calibration_plan
+from run_full import parser as full_parser
 
 
 class FullProtocolTests(unittest.TestCase):
+    def test_full_defaults_to_main_r_uq_and_retrospective_requires_opt_in(self):
+        args=full_parser().parse_args([])
+        self.assertEqual(args.uq_policy,'matured')
+        self.assertEqual(args.bridge_mode,'omit')  # Existing explicit user choice.
+        self.assertEqual(full_parser().parse_args(['--uq-policy','figure2_retrospective']).uq_policy,
+                         'figure2_retrospective')
+
     def test_omit_bridge_requires_additional_future_level_and_keeps_four_horizons(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'curves.csv'

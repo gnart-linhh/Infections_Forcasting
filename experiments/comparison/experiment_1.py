@@ -2,11 +2,13 @@
 from __future__ import annotations
 import argparse
 import ast
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 import hashlib
 import importlib.metadata
 import importlib.util
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import platform
@@ -31,6 +33,7 @@ from bank import FAMILIES,load_packed
 from neighbors import ExactNeighbors
 from smoothing import thin_plate_gcv
 from experiments.sensitivity.library import embed
+from model import WINDOW_FILTER
 
 PRIMARY=['Persistence','MA3','Drift','SES','sMOA']
 BASELINES=PRIMARY[:4]
@@ -41,17 +44,23 @@ RNG_ROOT=20261104
 QUOTA=100
 ATTEMPTS=800
 N,K,M,H=18387,5,4422,4
-RULES=dict(experiment='E1 limited historical data',version=1,
+EMBEDDING_RULES=dict(window_filter=WINDOW_FILTER,k=K,h=H,history_levels=K+1,
+    width=K+H+2,value_floor=1e-8,bridge='omit',order='original curve then chronological window',
+    construction='same sensitivity.library.embed for every bank',
+    audit='every x/y/curve_id row checked independently against level-window differences')
+RULES=dict(experiment='E1 limited historical data',version=3,window_filter=WINDOW_FILTER,
+    embedding=EMBEDDING_RULES,
     parameters=dict(N=N,k=K,m=M,h=H,bridge='omit',smoothing='gam'),
     primary=PRIMARY,secondary=SECONDARY,secondary_scope='B T=16,24 only',
     A_lengths=[6,8,11],B_lengths=LENGTHS,train_seeds=SEEDS,test_seeds=SEEDS,
     test_namespace=[RNG_ROOT,310,'test_seed','family','attempt'],attempts_per_cell=ATTEMPTS,quota_per_cell=QUOTA,
-    test_eligibility='original generator, weekly counts, first raw >=10 onset, >=28 steps from onset, first 100 eligible per cell',
+    test_eligibility='original generator, finite nonnegative values (zero allowed), weekly counts, first raw >=10 onset, >=28 steps from onset, first 100 eligible per cell',
     real_onset='frozen first >=10 raw count in 2020-04-04 vintage, known before all A forecast issuances',
     real_B='same 50 states x37 E2/E4 origins with >=24 records; last T input observations',
     preprocessing='all model inputs and point predictions floored at 1; scoring labels remain raw',
     SES='known first level; conditional SSE, 101 alpha grid plus local bounded refinements; endpoints; relative tie tolerance 1e-10, smaller alpha',
     ARIMA='d=1, trend=t; (0,1,0),(1,1,0),(0,1,1); finite AICc; state-space ML L-BFGS maxiter200; no fallback',
+    secondary_history='change in sMOA-minus-model absolute-loss gap, T24 minus T16, all-secondary common units; whole-unit bootstrap',
     masks='all primary including 3 sMOA banks; B common valid blocks across all five T; secondary pairwise and all-model masks across T16/24',
     MASE='mean absolute error / mean abs diff of permitted floored history; zero denominator = undefined',
     inference='1000 whole-curve/state cluster bootstrap draws; mean bank losses, no ensemble; seed20261104; 5% practical margin',
@@ -115,7 +124,7 @@ def baseline(model,raw):
 def synthetic_eligibility(curve):
     if curve is None:return 'generator_rejected',None
     values=np.asarray(curve.ts,float)
-    if not len(values) or not np.isfinite(values).all() or np.any(values<=0):return 'invalid_values',None
+    if not len(values) or not np.isfinite(values).all() or np.any(values<0):return 'invalid_values',None
     if curve.time_cadence!='weekly':return 'monthly',None
     if curve.scale!='counts':return 'proportion',None
     onset=np.flatnonzero(values>=10)
@@ -178,7 +187,9 @@ def generate_test(db):
                 content=digest_array(curve.ts) if curve is not None else None
                 take=reason=='eligible' and len(selected)<QUOTA
                 eligible+=reason=='eligible'
-                info={} if curve is None else dict(cadence=curve.time_cadence,scale=curve.scale,observations=len(curve.ts),onset=tau)
+                info={} if curve is None else dict(cadence=curve.time_cadence,scale=curve.scale,observations=len(curve.ts),onset=tau,
+                    zero_values=int(np.count_nonzero(curve.ts==0)),floor_values=int(np.count_nonzero(curve.ts<=1e-10)),
+                    legacy_nonpositive_rejected=bool(np.any(curve.ts<=0)))
                 audit.append((seed,f,j,json.dumps(key),reason,int(take),content,json.dumps(info)))
                 if take:selected.append((f'syn_{seed}_{f}_{j}',seed,family,j,tau,pack(curve.ts),content))
             with db:
@@ -206,14 +217,14 @@ def make_case(case_id,domain,arm,series,family,test_seed,origin,origin_index,T,o
         'low' if level<1000 else 'medium' if level<10000 else 'high',int((raw<1).sum()),int((raw<0).sum()),pack(query),gam,data_cutoff,issuance_date)
 
 
-def prepare_real(panel_dir,db):
+def prepare_real(panel_dir,db,manifest_path=None):
     if completed(db,'real_cases'):return
     panel=pd.read_csv(panel_dir/'panel.csv');timing=pd.read_csv(panel_dir/'origins.csv').set_index('forecast_origin')
     groups={(s,o):g.sort_values('target_end_date') for (s,o),g in panel.groupby(['series','forecast_origin'])}
     origins=sorted(panel.forecast_origin.unique());first=origins[0]
     if first!='2020-04-04':raise ValueError('Unexpected initial onset vintage')
     states=sorted(panel.series.unique())
-    manifest=ROOT/'outputs/truth_states/manifest.csv'
+    manifest=Path(manifest_path) if manifest_path is not None else ROOT/'outputs/truth_states/manifest.csv'
     truths={r.series:pd.read_csv(manifest.parent/r.truth).set_index('target_end_date').value for r in pd.read_csv(manifest).itertuples()}
     onsets={s:groups[(s,first)].loc[groups[(s,first)].value.ge(10),'target_end_date'].iloc[0] for s in states}
     common=[o for o in origins if all(len(groups[(s,o)])>=24 for s in states)]
@@ -283,7 +294,14 @@ def fit_secondary(model,z):
             point=np.asarray(result.forecast(H),float)
         status=getattr(result,'mle_retvals',{})
         if status is not None and not bool(status.get('success',False)):raise RuntimeError('Holt optimizer did not converge')
-        return np.maximum(point,1),dict(warnings=[str(w.message) for w in caught],parameters={k:float(v) for k,v in result.params.items() if np.isscalar(v) and not isinstance(v,(str,bool))},clipped_predictions=int((point<1).sum()))
+        # statsmodels emits NaN placeholders for unused seasonality/damping;
+        # only the four active additive, undamped Holt parameters belong here.
+        parameters={k:float(result.params[k]) for k in ['smoothing_level','smoothing_trend','initial_level','initial_trend']}
+        if not np.isfinite(np.r_[point,list(parameters.values()),result.sse]).all():raise RuntimeError('Nonfinite Holt parameters, loss or forecast')
+        return np.maximum(point,1),dict(warnings=[str(w.message) for w in caught],parameters=parameters,
+            initialization='estimated',optimizer='L-BFGS-B',maxiter=200,optimizer_success=True,
+            fitted_sse=float(result.sse),
+            clipped_predictions=int((point<1).sum()))
     from statsmodels.tsa.arima.model import ARIMA
     candidates=[];valid=[]
     for order in [(0,1,0),(1,1,0),(0,1,1)]:
@@ -304,28 +322,67 @@ def fit_secondary(model,z):
     return np.maximum(point,1),dict(candidates=candidates,selected=selected[4],clipped_predictions=int((point<1).sum()))
 
 
-def run_baselines(db,out):
+def fit_task(task):
+    model,case_id,blob=task;tick=time.perf_counter();info={};point=None
+    try:
+        raw=unpack(blob)
+        point,info=baseline(model,raw) if model in BASELINES else fit_secondary(model,np.maximum(raw,1))
+        status=info.get('status','ok')
+        if point is not None and (len(point)!=H or not np.isfinite(point).all()):raise ValueError('Nonfinite forecast')
+    except Exception as exc:status='fit_failed';point=None;info=dict(reason=str(exc))
+    return case_id,status,time.perf_counter()-tick,info,point
+
+
+def run_baselines(db,out,workers=1):
     rows=db.execute('SELECT case_id,arm,T,history FROM cases ORDER BY case_id').fetchall()
     available=importlib.util.find_spec('statsmodels') is not None
     for model in BASELINES+SECONDARY:
         done={r[0] for r in db.execute('SELECT case_id FROM fits WHERE model=? AND bank_seed=-1',(model,))}
+        tasks=[(model,i,b) for i,a,t,b in rows if i not in done and
+               (model in BASELINES or (available and a=='B' and t in [16,24]))]
+        pool=(ProcessPoolExecutor(max_workers=workers,mp_context=multiprocessing.get_context('spawn'))
+              if model in SECONDARY and available and workers>1 else None)
+        results=iter(pool.map(fit_task,tasks,chunksize=4) if pool else map(fit_task,tasks))
         for j,(case_id,arm,T,blob) in enumerate(rows):
             if case_id in done:continue
             tick=time.perf_counter();info={};point=None
             if model in SECONDARY and (arm!='B' or T not in [16,24]):status='outside_secondary_scope'
             elif model in SECONDARY and not available:status='dependency_missing'
             else:
-                try:
-                    raw=unpack(blob)
-                    point,info=baseline(model,raw) if model in BASELINES else fit_secondary(model,np.maximum(raw,1))
-                    status=info.get('status','ok')
-                    if point is not None and not np.isfinite(point).all():raise ValueError('Nonfinite forecast')
-                except Exception as exc:status='fit_failed';point=None;info=dict(reason=str(exc))
-            insert_fit(db,model,-1,case_id,status,time.perf_counter()-tick,info,point)
-            if j%250==249:db.commit()
+                actual_id,status,seconds,info,point=next(results)
+                if actual_id!=case_id:raise RuntimeError('Parallel fit ordering changed')
+            if status in ['outside_secondary_scope','dependency_missing']:seconds=time.perf_counter()-tick
+            insert_fit(db,model,-1,case_id,status,seconds,info,point)
+            if j%250==249:
+                db.commit()
+                atomic_json(out/'progress.json',dict(status='running',phase='baselines',model=model,
+                    completed_cases=j+1,total_cases=len(rows),workers=workers if pool else 1))
         db.commit()
+        if pool:pool.shutdown()
         print('Baseline finished:',model,flush=True)
         atomic_json(out/'progress.json',dict(status='running',phase='baselines',model=model,fit_blocks=db.execute('SELECT COUNT(*) FROM fits').fetchone()[0]))
+
+
+def embedding_audit(curves,curve_ids,x,y,codes,scratch):
+    """Independent, full row-by-row check, not just comparison of metadata flags."""
+    offset=potential=0
+    for curve,ident in zip(curves,curve_ids):
+        values=np.maximum(curve.ts,1e-8)
+        if len(values)<K+H+2:continue
+        windows=np.lib.stride_tricks.sliding_window_view(values,K+H+2)
+        valid=np.ptp(windows[:,:K+1],axis=1)>0
+        expected_x=np.diff(windows[:,:K+1],axis=1)[valid]
+        expected_y=np.diff(windows[:,K+1:],axis=1)[valid]
+        end=offset+len(expected_x)
+        if (not np.array_equal(x[offset:end],expected_x) or not np.array_equal(y[offset:end],expected_y)
+                or not np.all(codes[offset:end]==ident)):
+            raise ValueError(f'Embedding audit failed for curve {ident}')
+        offset=end;potential+=len(windows)
+    if offset!=len(x):raise ValueError('Embedding audit row count mismatch')
+    fingerprint=hashlib.sha256(json.dumps(EMBEDDING_RULES,sort_keys=True).encode()).hexdigest()
+    return dict(rules=EMBEDDING_RULES,rules_sha256=fingerprint,verified_rows=offset,
+                potential_windows=potential,excluded_constant_windows=potential-offset,
+                files_sha256={n:file_hash(Path(scratch)/f'{n}.dat') for n in ['x','y','curve_ids']})
 
 
 def smoa_worker(args):
@@ -334,18 +391,13 @@ def smoa_worker(args):
     name=f'smoa_bank_{seed}'
     if completed(db,name):return
     tick=time.perf_counter();packed=args.e2_dir/f'packed/seed_{seed}'
-    if seed==0:
-        cache=ROOT/'outputs/paper_embedding_k5_h4_omit';meta=json.loads((cache/'metadata.json').read_text())
-        x=np.memmap(cache/'x.dat',dtype='<f8',mode='r',shape=(meta['rows'],K))
-        full_y=np.memmap(cache/'y.dat',dtype='<f8',mode='r',shape=(meta['rows'],H+1));y=full_y[:,1:]
-        embedding_kind='verified existing cache load'
-    else:
-        curves=load_packed(packed/'curves.npz')
-        with np.load(packed/'attempts.npz',allow_pickle=False) as a:curve_ids=a['curve_id']
-        x,y,codes=embed(curves,curve_ids,K,out/'scratch',h=H)
-        del curves
-        embedding_kind='fresh embedding from existing packed bank'
+    curves=load_packed(packed/'curves.npz')
+    with np.load(packed/'attempts.npz',allow_pickle=False) as a:curve_ids=a['curve_id']
+    x,y,codes=embed(curves,curve_ids,K,out/'scratch',h=H)
+    embedding_kind='same embed() from existing packed bank, independently audited'
     embedding_seconds=time.perf_counter()-tick
+    tick=time.perf_counter();audit=embedding_audit(curves,curve_ids,x,y,codes,out/'scratch')
+    audit_seconds=time.perf_counter()-tick;del curves
     tick=time.perf_counter();index=ExactNeighbors(x,workers=1);index_seconds=time.perf_counter()-tick
     done={r[0] for r in db.execute("SELECT case_id FROM fits WHERE model='sMOA' AND bank_seed=?",(seed,))}
     rows=[r for r in db.execute('SELECT case_id,last,query,gam_seconds FROM cases ORDER BY case_id') if r[0] not in done]
@@ -364,13 +416,13 @@ def smoa_worker(args):
                 insert_fit(db,'sMOA',seed,case_id,'ok',gam+batch_seconds/len(batch)+aggregation,info,point)
         if begin%1024==0:print(f'sMOA seed={seed}: {min(begin+len(batch),len(rows))}/{len(rows)} new cases',flush=True)
     peak=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*(1 if sys.platform=='darwin' else 1024)
-    with db:mark(db,name,dict(seed=seed,rows=len(x),embedding_kind=embedding_kind,embedding_seconds=embedding_seconds,
+    with db:mark(db,name,dict(seed=seed,rows=len(x),window_filter=WINDOW_FILTER,embedding_audit=audit,
+          embedding_kind=embedding_kind,embedding_seconds=embedding_seconds,audit_seconds=audit_seconds,
           index_seconds=index_seconds,query_seconds=query_seconds,aggregation_seconds=aggregation_seconds,peak_rss_bytes=int(peak)))
     del index,x,y
-    if seed!=0:
-        del codes
-        for name in ['x','y','curve_ids']:(out/'scratch'/f'{name}.dat').unlink()
-        (out/'scratch').rmdir()
+    del codes
+    for name in ['x','y','curve_ids']:(out/'scratch'/f'{name}.dat').unlink()
+    (out/'scratch').rmdir()
     db.close()
 
 
@@ -390,13 +442,14 @@ def training_audit(db,e2):
 def engine_signature():
     tree=ast.parse(Path(__file__).read_text())
     names=['ses','baseline','synthetic_eligibility','generate_test','make_case','prepare_real','prepare_synthetic',
-           'insert_fit','fit_secondary','run_baselines','smoa_worker','training_audit']
+           'insert_fit','fit_secondary','fit_task','run_baselines','embedding_audit','smoa_worker','training_audit']
     nodes=[ast.dump(n,include_attributes=False) for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]
     return hashlib.sha256(json.dumps([RULES,nodes],sort_keys=True).encode()).hexdigest()
 
 
 def validate_inputs(args):
-    paths=[args.panel_dir/'panel.csv',args.panel_dir/'origins.csv',args.panel_dir/'provenance.json',args.e2_dir/'protocol.json']
+    paths=[args.panel_dir/'panel.csv',args.panel_dir/'origins.csv',args.panel_dir/'provenance.json',
+           args.e2_dir/'protocol.json',args.truth_manifest]
     original=json.loads((args.e2_dir/'protocol.json').read_text())
     for path,digest in original['inputs_sha256'].items():
         if file_hash(Path(path))!=digest:raise ValueError('Modified E2 input')
@@ -412,15 +465,9 @@ def validate_inputs(args):
         paths.append(folder/'metadata.json')
         if file_hash(Path(meta['source']))!=meta['source_sha256']:raise ValueError('Modified source bank')
         paths.append(Path(meta['source']))
-    cache=ROOT/'outputs/paper_embedding_k5_h4_omit';meta=json.loads((cache/'metadata.json').read_text())
-    if meta['k']!=K or meta['horizon']!=H+1 or meta['library_sha256']!=json.loads((args.e2_dir/'packed/seed_0/metadata.json').read_text())['source_sha256']:
-        raise ValueError('Wrong omit-bridge cache')
-    for name in ['x','y']:
-        if file_hash(cache/f'{name}.dat')!=meta[name+'_sha256']:raise ValueError('Modified original cache')
-        paths.append(cache/f'{name}.dat')
-    paths.append(cache/'metadata.json')
     for name in ['experiments/synthetic/generator.py','experiments/synthetic/bank.py','experiments/sensitivity/library.py',
-                 'experiments/forecasting/model.py','experiments/forecasting/smoothing.py','experiments/forecasting/neighbors.py','experiments/runtime.py']:
+                 'experiments/forecasting/model.py',
+                 'experiments/forecasting/smoothing.py','experiments/forecasting/neighbors.py','experiments/runtime.py']:
         paths.append(ROOT/name)
     return {str(p.resolve()):file_hash(p) for p in set(paths)}
 
@@ -523,6 +570,45 @@ def history_changes(data):
         rows.append(dict(scope='history_24_minus_6',domain=domain,arm='B',T=24,baseline=model,dimension='overall',group='all',
                          n=len(g),**paired_bootstrap(g,'loss_24','loss_6')))
     return pd.DataFrame(rows)
+
+
+def secondary_history_changes(data):
+    sm=data.loc[data.model.eq('sMOA')].copy()
+    sm['loss']=(sm.prediction-sm.actual).abs()
+    mean=sm.groupby(['case_id','horizon'],as_index=False).loss.mean().rename(columns={'loss':'smoa_loss'})
+    rows=[]
+    for model in SECONDARY:
+        g=data.loc[data.model.eq(model)].merge(mean,on=['case_id','horizon'],validate='one_to_one')
+        g['gap']=g.smoa_loss-(g.prediction-g.actual).abs()
+        keys=['domain','series','origin','cluster','horizon']
+        paired=g.loc[g['T'].eq(24),keys+['gap']].merge(g.loc[g['T'].eq(16),keys+['gap']],
+            on=keys,validate='one_to_one',suffixes=('_24','_16'))
+        for domain,frame in paired.groupby('domain'):
+            result=paired_bootstrap(frame,'gap_24','gap_16')
+            rows.append(dict(scope='secondary_gap_24_minus_16',domain=domain,arm='B',T=24,baseline=model,
+                dimension='overall',group='all',n=len(frame),practical_equivalence=False,
+                **{k:result[k] for k in ['delta_MAE','lo','hi','clusters']}))
+    return pd.DataFrame(rows)
+
+
+def selection_audit(db):
+    rows=db.execute('SELECT test_seed,family,attempt,reason,selected,metadata FROM test_audit ORDER BY test_seed,family,attempt').fetchall()
+    zero=legacy_lost=floor_selected=selected_zeros=0;groups={};reasons={};changed=0
+    for seed,family,j,reason,selected,raw in rows:
+        info=json.loads(raw);has_zero=info.get('zero_values',0)>0
+        zero+=has_zero;legacy_lost+=reason=='eligible' and has_zero
+        selected_zeros+=selected and has_zero;floor_selected+=selected and info.get('floor_values',0)>0
+        reasons[reason]=reasons.get(reason,0)+1
+        group=groups.setdefault((seed,family),dict(current=[],legacy=[]))
+        if selected:group['current'].append(j)
+        if reason=='eligible' and not info.get('legacy_nonpositive_rejected',False) and len(group['legacy'])<QUOTA:
+            group['legacy'].append(j)
+    for g in groups.values():changed+=len(set(g['current'])^set(g['legacy']))
+    return dict(attempts=len(rows),exact_zero_attempts=zero,otherwise_eligible_zero_curves=legacy_lost,
+                selected_zero_curves=selected_zeros,selected_floor_curves=floor_selected,
+                selected_ids_changed_vs_legacy_zero_gate=changed,rejection_counts=reasons,
+                generator_floor=1e-10,zero_policy='allow zero; reject negative or nonfinite',
+                scope='weekly-count episodes with raw onset>=10 and 28 steps follow-up; not all generator outputs')
 
 
 def availability_table(cases,fits):
@@ -650,11 +736,24 @@ def write_report(out,scores,pairs,availability,runtime,verification):
     real_b=overall.loc[overall.domain.eq('real')&overall.arm.eq('B')].set_index(['T','model'])
     real_pairs=pairs.loc[pairs.scope.eq('primary_common')&pairs.dimension.eq('overall')&pairs.domain.eq('real')&pairs.baseline.eq('Persistence')].set_index(['arm','T'])
     normalized=verification['synthetic_B6_normalized_loss_diagnostic']
+    protocol=json.loads((out/'protocol.json').read_text())
+    banks=pd.DataFrame([dict(seed=s,windows=v['rows'],verified_rows=v['embedding_audit']['verified_rows'],
+        excluded_constant=v['embedding_audit']['excluded_constant_windows'],rules_hash=v['embedding_audit']['rules_sha256'][:16])
+        for s,v in verification['training_banks'].items()])
+    selection=verification['test_selection_audit']
+    secondary=scores.loc[scores.scope.eq('all_secondary_common')&scores.statistic.eq('mean')&scores.dimension.eq('overall')]
+    gap_changes=pairs.loc[pairs.scope.eq('secondary_gap_24_minus_16')]
+    secondary_text=(markdown_table(secondary,['domain','T','model','n','MAE','RMSE','normalized_MAE','MASE'])
+                    if len(secondary) else 'No valid all-secondary common cohort. Limit RQ2 to Persistence, MA3, Drift and SES; no Holt/ARIMA accuracy claim.')
     report=f'''# Experiment 1 — Comparative Evaluation under Limited Historical Data
 
 **Primary completed:** {verification['primary_predictions']:,} point forecasts, {verification['cases']:,} permitted-history cases. Persistence, MA(3), Drift, SES and sMOA; N=18.387 attempts/family, k=5, m=4.422, GAM, omit bridge. Three sMOA training banks, crossed with all 900 fresh synthetic test curves. Baselines run once per case; no ensemble or repeated baseline pseudo-replicates.
 
 **Secondary status: {verification['secondary_status']}**. Missing statsmodels produces no Holt/ARIMA accuracy estimates. It is not evidence of model failure or poor accuracy. All out-of-scope and dependency statuses are in availability.csv/database.
+
+Protocol version **{verification['protocol_version']}**, window filter **{verification['window_filter']}**,
+engine signature `{protocol['engine_signature']}`. Package versions: `{json.dumps(protocol['packages'],sort_keys=True)}`.
+All values below are calculated from this run's results.sqlite; no legacy MAEs are imported.
 
 ## Setup and information availability
 
@@ -664,7 +763,19 @@ Synthetic: 900 selected weekly-count curves, balanced 100 per family/test seed, 
 
 Real A: 50 states ×3 T =150 history cases; onset metadata frozen at 2020-04-04, known before all evaluated issuance dates. Real B: 50 states ×37 common origins ×5 T =9,250 history cases. Saturday origin labels, Sunday cutoff, Monday issuance. All histories come from exact historical JHU vintages; final truth used only for scoring. This is a historical-vintage backtest, not prospective ForecastHub parity.
 
-Every model receives input floored at 1 and predictions floored at 1. Scoring labels remain raw. No +100 offset, log transform, future-peak normalization, future tuning or upper clipping. sMOA retains the original valid-window criterion, including floating-point-retained constant histories. Training has an external synthetic prior and associated offline cost.
+Every model receives input floored at 1 and predictions floored at 1. Scoring labels remain raw, including zeros. No +100 offset, log transform, future-peak normalization, future tuning or upper clipping. All three sMOA banks use the same embed() and nonconstant_v2 filter; exactly flat matching histories are excluded. Training has an external synthetic prior and associated offline cost.
+
+## Training-bank embedding verification
+
+{markdown_table(banks,['seed','windows','verified_rows','excluded_constant','rules_hash'])}
+
+Every x/y/curve-id row is independently checked against chronological per-curve level windows: width 11, history 6 levels, floor 1e-8, five matching differences, omit bridge and four future differences. All banks must share one rule fingerprint. Full x/y/id hashes are stored in jobs metadata, surfaced in progress.json under training_banks. Scratch arrays are removed after verification and forecasting.
+
+## Synthetic zero-selection audit
+
+Across **{selection['attempts']:,}** fixed attempts, exact-zero curves returned by the generator: **{selection['exact_zero_attempts']}**; otherwise eligible zero curves that the old <=0 gate would discard: **{selection['otherwise_eligible_zero_curves']}**. Selected curves with exact zero: **{selection['selected_zero_curves']}**; selected curves touching the generator's 1e-10 floor: **{selection['selected_floor_curves']}**. Selected attempted IDs differing under the legacy zero gate: **{selection['selected_ids_changed_vs_legacy_zero_gate']}**.
+
+The new gate accepts finite nonnegative values. The current generator already floors outputs at 1e-10, so a zero count of zero diagnoses this generator's support, not proof that a zero-rejecting rule is generally harmless. Inputs are floored at 1 for every model; scoring labels stay raw. Rejection/eligibility counts: `{json.dumps(selection['rejection_counts'],sort_keys=True)}`. Weekly/count metadata, onset >=10 and 28-step follow-up still condition the cohort: conclusions do not cover every generator output or short/no-onset episode. Follow-up availability is required for paired scoring, never selected by forecast error.
 
 ## Main accuracy tables
 
@@ -683,12 +794,22 @@ These are observed rankings on common cohorts. A trends combine history growth w
 
 ### Interpretation of RQ1–RQ5
 
-- **Very short history:** real A T6 has SES MAE {real_a.loc[(6,'SES'),'MAE']:,.2f} versus sMOA {real_a.loc[(6,'sMOA'),'MAE']:,.2f}. sMOA is not uniformly preferable at the minimum supported history. Relative to Persistence, its T6 paired delta is {real_pairs.loc[('A',6),'delta_MAE']:+,.2f}, CI [{real_pairs.loc[('A',6),'lo']:+,.2f}, {real_pairs.loc[('A',6),'hi']:+,.2f}], so the observed disadvantage is uncertain on these 50 states.
-- **Raw and normalized metrics can disagree:** real A T8 raw MAE favors sMOA ({real_a.loc[(8,'sMOA'),'MAE']:,.2f} versus SES {real_a.loc[(8,'SES'),'MAE']:,.2f}), but normalized MAE favors SES ({real_a.loc[(8,'SES'),'normalized_MAE']:.4f} versus sMOA {real_a.loc[(8,'sMOA'),'normalized_MAE']:.4f}). Raw errors emphasize high-count events; per-origin normalization changes weights. T8 raw paired CI versus Persistence still crosses zero. Do not present that numeric ranking as a universal improvement.
-- **More stable evidence at real A T11:** sMOA−Persistence MAE is {real_pairs.loc[('A',11),'delta_MAE']:+,.2f}, CI [{real_pairs.loc[('A',11),'lo']:+,.2f}, {real_pairs.loc[('A',11),'hi']:+,.2f}]. This is conditional evidence on the declared cohort/banks, not a universal claim about epidemics.
-- **Fixed-origin availability:** real B sMOA MAE changes from {real_b.loc[(6,'sMOA'),'MAE']:,.2f} at T6 to {real_b.loc[(24,'sMOA'),'MAE']:,.2f} at T24; the best observed raw score is at T11, not the longest history. Normalized MAE goes from {real_b.loc[(6,'sMOA'),'normalized_MAE']:.4f} to {real_b.loc[(24,'sMOA'),'normalized_MAE']:.4f}, so extra history does not improve every metric or imply a monotone gain. B comparisons are on exactly the same target events.
-- **Complexity:** simple methods remain much cheaper; no overall comparison establishes practical equivalence under the declared interval criterion. Failure to certify equivalence is not proof of non-equivalence. Read the raw/normalized benefits and measured preparation/online cost together rather than calling complexity automatically justified.
-- **Conditions:** scores.csv contains phase/level and horizon strata. In real B T6, rising-phase sMOA is only slightly better than Persistence in raw MAE, while declining/stable strata show larger differences. These are descriptive subgroup results; all five models become less accurate as horizon grows in the displayed B panels.
+- **Very short history:** real A T6 SES MAE = {real_a.loc[(6,'SES'),'MAE']:,.2f}, sMOA = {real_a.loc[(6,'sMOA'),'MAE']:,.2f}. The sMOA-minus-Persistence paired delta is {real_pairs.loc[('A',6),'delta_MAE']:+,.2f}, CI [{real_pairs.loc[('A',6),'lo']:+,.2f}, {real_pairs.loc[('A',6),'hi']:+,.2f}]. Interpret direction and uncertainty from this run; A also changes the origin as T grows.
+- **Raw versus normalized:** real A T8 sMOA/SES raw MAEs = {real_a.loc[(8,'sMOA'),'MAE']:,.2f}/{real_a.loc[(8,'SES'),'MAE']:,.2f}; normalized MAEs = {real_a.loc[(8,'sMOA'),'normalized_MAE']:.4f}/{real_a.loc[(8,'SES'),'normalized_MAE']:.4f}. Raw errors weight high-count events more strongly; these metrics answer differently weighted questions.
+- **Real A T11:** sMOA−Persistence MAE = {real_pairs.loc[('A',11),'delta_MAE']:+,.2f}, CI [{real_pairs.loc[('A',11),'lo']:+,.2f}, {real_pairs.loc[('A',11),'hi']:+,.2f}]. This is conditional evidence on the declared cohort/banks.
+- **Fixed-origin availability:** real B sMOA MAE = {real_b.loc[(6,'sMOA'),'MAE']:,.2f} at T6 and {real_b.loc[(24,'sMOA'),'MAE']:,.2f} at T24; normalized MAE = {real_b.loc[(6,'sMOA'),'normalized_MAE']:.4f} and {real_b.loc[(24,'sMOA'),'normalized_MAE']:.4f}. Only B holds the target event fixed. Read history-change intervals before interpreting a gain.
+- **Complexity/equivalence:** {len(equivalent)} overall comparisons meet the declared ±5% interval criterion in this run. Failure to certify equivalence does not prove non-equivalence; compare the actual measured offline/online costs with paired losses.
+- **Horizon/conditions:** current-run horizon, phase and level strata are in scores.csv. Their observed directions must be read from the tables/plots; no monotonic-error or phase ranking from the old run is assumed.
+
+### RQ2 supplementary Holt/ARIMA evaluation
+
+Holt and small-set ARIMA are evaluated only in B at T16/T24. They do not establish general ETS/SARIMA superiority or behavior at T6/T8/T11. Failed/unstable fits produce no fallback predictions. The all-secondary common mask retains **{verification['secondary_common_cases']:,} history cases**, requiring successful primary models, both secondary models and both lengths for each unit. Pairwise masks are also reported and may have different denominators.
+
+{secondary_text}
+
+Change in gap **(MAE_sMOA − MAE_model), T24 minus T16**, on the same valid units; negative values mean the relative sMOA gap decreases. Whole-unit bootstrap preserves the pairing across lengths. This is descriptive, not a universal claim across diseases.
+
+{markdown_table(gap_changes,['domain','baseline','n','delta_MAE','lo','hi']) if len(gap_changes) else 'No estimable matched T16/T24 secondary gap change.'}
 
 ### Heavy tails in synthetic normalized errors
 
@@ -725,7 +846,7 @@ Online sMOA time = shared measured per-case GAM cost charged to each bank + meas
 
 {markdown_table(timings,['bank_seed','seconds','peak_rss_bytes','timing'])}
 
-Embedding/index preparation is separate. Seed0 uses the verified existing cache; seeds1/2 freshly embed existing full packed banks. No synthetic training generation occurs in this run; historical generation/export or replay timings in runtime.csv are not zero-cost assumptions and not newly measured generation. Full input verification/hash I/O and test generation are outside online model cost. Software/hardware/thread limits are in protocol; index workers=1. Microsecond baseline differences are dominated by runtime/clock overhead and should not establish a reliable fine ranking.
+Embedding/index preparation is separate. All three seeds freshly embed the existing full packed banks using the same function. Every row is independently audited, and hashes are retained before scratch cleanup; audit cost is separate from online inference. No synthetic training generation occurs in this run; historical generation/export or replay timings in runtime.csv are not newly measured generation. Full input verification/hash I/O and test generation are outside online cost. Holt/ARIMA fit blocks use ordered independent processes; recorded block runtime measures worker fit+prediction, not queue latency. Software/hardware/thread limits are in protocol; sMOA index workers=1. Microsecond baseline differences should not establish a reliable fine ranking.
 
 ![Error versus runtime](figures/error_runtime.png)
 
@@ -764,6 +885,7 @@ def analyze(out):
         extra=data.loc[data.case_id.isin(secondary_ids)]
         scores=pd.concat([scores,summarize_scores(extra,'all_secondary_common')],ignore_index=True)
         pairs=pd.concat([pairs,paired_tables(extra,'all_secondary_common')],ignore_index=True)
+        pairs=pd.concat([pairs,secondary_history_changes(extra)],ignore_index=True)
     pairs=pd.concat([pairs,history_changes(primary)],ignore_index=True)
     availability=availability_table(cases,fits);runtime=runtime_table(db,cases,fits)
     for name,frame in [('scores',scores),('paired_comparisons',pairs),('availability',availability),('runtime',runtime)]:frame.to_csv(out/f'{name}.csv',index=False)
@@ -788,8 +910,19 @@ def analyze(out):
     normalized_diagnostic=dict(mean=float(loss.mean()),median=float(np.median(loss)),p95=float(np.quantile(loss,.95)),
         p99=float(np.quantile(loss,.99)),top_one_percent_share=float(tail.sum()/loss.sum()),
         unit_scale_cases=int(diagnostic.drop_duplicates('case_id').normalization.eq(1).sum()))
+    bank_audits={str(s):completed(db,f'smoa_bank_{s}') for s in SEEDS}
+    fingerprints={v['embedding_audit']['rules_sha256'] for v in bank_audits.values()}
+    if len(fingerprints)!=1 or any(v['window_filter']!=WINDOW_FILTER or v['rows']!=v['embedding_audit']['verified_rows']
+                                  for v in bank_audits.values()):raise ValueError('Training banks do not share verified embedding rules')
+    secondary=availability.loc[availability.model.isin(SECONDARY)]
+    secondary_counts=secondary.groupby('model')[['eligible_blocks','valid_blocks','fit_failed','no_valid_candidate','dependency_missing']].sum()
     verification=dict(cases=len(cases),primary_predictions=primary_count,primary_common_cases=len(keep),test_curves=900,test_attempts=7200,
-        secondary_status='dependency_missing' if availability.dependency_missing.sum() else 'evaluated',
+        protocol_version=RULES['version'],window_filter=WINDOW_FILTER,training_banks=bank_audits,
+        test_selection_audit=selection_audit(db),secondary_common_cases=len(secondary_ids),
+        primary_common_cases_by_group=cases.loc[cases.case_id.isin(keep)].groupby(['domain','arm','T']).size().reset_index(name='cases').to_dict('records'),
+        secondary_counts=secondary_counts.reset_index().to_dict('records'),
+        secondary_status=('dependency_missing' if secondary.dependency_missing.sum() else
+                          'evaluated_with_failures' if (secondary.fit_failed+secondary.no_valid_candidate).sum() else 'evaluated'),
         test_training_hash_collisions=int(collision),duplicate_test_hashes=int(duplicate),
         MASE_undefined_targets=int(obs.mase_den.eq(0).sum()),negative_scoring_targets=int(obs.actual.lt(0).sum()),
         B_queries_different_from_T6=different,fit_blocks=len(fits),primary_failures=int(fits.loc[fits.model.isin(PRIMARY),'status'].ne('ok').sum()),
@@ -803,20 +936,32 @@ def run(args):
     start=time.perf_counter();out=args.output_dir.resolve();out.mkdir(parents=True,exist_ok=True)
     lock=acquire_run_lock(out/'run.lock')
     prior=json.loads((out/'progress.json').read_text()) if (out/'progress.json').exists() else {}
-    inputs=validate_inputs(args);signature=engine_signature();path=out/'protocol.json'
+    signature=engine_signature();path=out/'protocol.json'
+    if path.exists() and json.loads(path.read_text())['engine_signature']!=signature:
+        raise ValueError('Prediction code/design changed; use a fresh output directory, not a legacy resume')
+    inputs=validate_inputs(args)
+    packages={p:importlib.metadata.version(p) for p in ['numpy','scipy','pandas','matplotlib']}
+    for package in ['statsmodels','patsy','formulaic','wrapt']:
+        if importlib.util.find_spec(package) is not None:packages[package]=importlib.metadata.version(package)
+    if args.require_secondary:
+        from statsmodels.tsa.holtwinters import Holt
+        from statsmodels.tsa.arima.model import ARIMA
     if path.exists():
         p=json.loads(path.read_text())
-        if not args.resume or p['engine_signature']!=signature or p['inputs_sha256']!=inputs:raise ValueError('Resume requires identical design, prediction code and inputs')
+        if (not args.resume or p['engine_signature']!=signature or p['inputs_sha256']!=inputs or p['packages']!=packages
+                or p['workers']!=args.workers or p['require_secondary']!=args.require_secondary):
+            raise ValueError('Resume requires identical design, prediction code, inputs and software/runtime configuration')
     else:
         atomic_json(path,dict(rules=RULES,source=Path(__file__).read_text(),engine_signature=signature,inputs_sha256=inputs,
             created_utc=datetime.now(timezone.utc).isoformat(),hardware=dict(platform=platform.platform(),processor=platform.processor(),cpus=os.cpu_count()),
-            packages={p:importlib.metadata.version(p) for p in ['numpy','scipy','pandas','matplotlib']},
+            packages=packages,workers=args.workers,require_secondary=args.require_secondary,
+            thread_limits={k:os.environ.get(k) for k in ['OPENBLAS_NUM_THREADS','OMP_NUM_THREADS','VECLIB_MAXIMUM_THREADS']},
             statsmodels_available=importlib.util.find_spec('statsmodels') is not None))
     atomic_json(out/'progress.json',dict(status='running',phase='preparing_test'))
     db=connect(out);initialize(db)
     generate_test(db);training_audit(db,args.e2_dir)
-    prepare_real(args.panel_dir,db);prepare_synthetic(db)
-    run_baselines(db,out);db.close()
+    prepare_real(args.panel_dir,db,args.truth_manifest);prepare_synthetic(db)
+    run_baselines(db,out,args.workers);db.close()
     env=dict(os.environ,OPENBLAS_NUM_THREADS='1',OMP_NUM_THREADS='1',VECLIB_MAXIMUM_THREADS='1')
     for seed in SEEDS:
         atomic_json(out/'progress.json',dict(status='running',phase='smoa',bank_seed=seed))
@@ -834,9 +979,12 @@ def run(args):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output-dir',type=Path,default=ROOT/'outputs/experiment_1')
+    parser.add_argument('--output-dir',type=Path,default=ROOT/'outputs/experiment_1_nonconstant_v2')
     parser.add_argument('--e2-dir',type=Path,default=ROOT/'outputs/experiment_2')
     parser.add_argument('--panel-dir',type=Path,default=ROOT/'outputs/epidemic_panel')
+    parser.add_argument('--truth-manifest',type=Path,default=ROOT/'outputs/truth_states/manifest.csv')
+    parser.add_argument('--workers',type=int,default=4,choices=range(1,9),help='Independent processes for Holt/ARIMA; ordered results')
+    parser.add_argument('--require-secondary',action='store_true',help='Require usable statsmodels before starting the run')
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--worker',action='store_true')
     parser.add_argument('--bank-seed',type=int,choices=SEEDS)

@@ -1,4 +1,4 @@
-"""Online negative-binomial dispersion and quantile scoring for sMOA."""
+"""Negative-binomial UQ with explicit matured or retrospective calibration."""
 from __future__ import annotations
 import numpy as np
 from scipy.optimize import minimize_scalar
@@ -39,8 +39,8 @@ def dispersion(prior, origin, horizon, field='forecast', horizons=4, policy='mat
                 np.isfinite(r['true_value']) and r['true_value'] >= 0]
     if horizon < 1 or horizon > len(INITIAL_SIZES):
         raise ValueError('Probabilistic forecasts support horizons 1 to 4')
-    # Upstream switches after six complete forecast origins. Only matured outcomes
-    # are passed to the fit; the current origin is never in prior.
+    # Upstream switches after six complete forecast origins (24 stored rows).
+    # Eligibility then follows policy; the current origin is never in prior.
     if len(prior) < 6 * horizons or not eligible:
         return INITIAL_SIZES[horizon-1], 'initial', len(eligible)
     return fit_size([r[field] for r in eligible], [r['true_value'] for r in eligible]), 'mle', len(eligible)
@@ -74,7 +74,11 @@ def scores(quantiles, actual):
 
 
 def calibration_plan(prior,origin,horizons=4,policy='matured'):
-    """Default is causal. Figure 2's retrospective convention must be explicit."""
+    """Matured limits target dates, not data vintage or warmup look-ahead.
+
+    Figure 2's retrospective convention must be explicit. Neither policy alone
+    establishes a fully real-time evaluation.
+    """
     result={}
     for field in ['forecast']:
         for horizon in range(1,horizons+1):

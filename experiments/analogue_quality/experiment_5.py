@@ -27,13 +27,15 @@ from runtime import atomic_json,file_hash,acquire_run_lock
 from neighbors import ExactNeighbors
 from experiments.error_analysis.conditions import features
 from experiments.error_analysis.library import embeddings
+from model import WINDOW_FILTER
+from experiments.error_analysis.audit import e2_reference, validate_cache
 
 PARAMETERS=dict(N=18387,k=5,m=4422,h=4,seed=0,smoothing='gam',bridge='omit')
 KEYS=['series','forecast_origin']
 DISTANCES=['minimum_distance','mean_distance','median_distance']
 CUTOFF='2020-12-31'
 TEST_START='2021-01-01'
-RULES=dict(parameters=PARAMETERS,cohort='unchanged E2/E4: 50 states x50 origins x4 horizons',
+RULES=dict(version=2,parameters=PARAMETERS,window_filter=WINDOW_FILTER,cohort='unchanged E2/E4: 50 states x50 origins x4 horizons',
     primary_distance='mean_distance_scaled',
     scale='max(mean(last 6 origin-available raw weekly values floored at 1),1)',
     scaled_distance='raw top-m L1 distance / (5 * level_scale); not a different neighbor search',
@@ -156,7 +158,7 @@ def replay_distances(cases,contexts,x,y,stored_matches,stored_forecasts,m=4422):
             values=dict(minimum_distance=float(distance[0]),mean_distance=float(distance.mean()),
                 median_distance=float(np.median(distance)),maximum_distance=float(distance[-1]))
             for field in ['minimum_distance','median_distance','maximum_distance']:
-                if not np.isclose(values[field],known[field],rtol=1e-10,atol=1e-8):raise ValueError('Replayed distance differs from E2')
+                if values[field]!=known[field]:raise ValueError('Replayed distance differs from E2')
             for h,pred in enumerate(point,1):
                 if float(expected.loc[(state,origin,h),'prediction'])!=pred:raise ValueError('Replayed point differs from E2')
             rows.append(dict(series=state,forecast_origin=origin,**values))
@@ -366,7 +368,7 @@ def write_report(out,data,corr,risk,groups,metadata):
         '- Distance similarity represents past trajectories, not future mechanisms. Novel waves, phase changes and reporting zeros can break that link; observations here do not establish causality.',
         '- State-cluster percentile intervals use 500 resamples retaining origins within state. They do not remove national temporal dependence; one fixed time split is not external validation. Strata with <20 cases or constant inputs have NA correlation.',
         '- The primary mean-distance result uses one training bank. Two other E2 banks support only a median-distance check; no mean distance was invented for them.',
-        '- This preserves the existing numerical core, including its floating-point variance filter, to match E2/E4. Python/R numerical parity is not established.',
+        '- The numerical core must match the recorded E2 source; legacy NumPy-variance results cannot be replayed with nonconstant_v2 embeddings. Python/R numerical parity is not established.',
         '- Quartile/quantile cuts are frozen from early-period cases and may have imbalanced/empty groups on test. Hidden boxplot outlier markers affect display only; all instances remain in scores and scatter.',
         '- Confidence intervals are descriptive, without multiple-comparison adjustment. Conditional associations and one diagnostic family do not prove actionable risk prediction or absence of every possible distance-based signal. Read incremental held-out AUROC/Brier before treating distance as a warning signal.','']
     for name in ['01_distance_error','02_error_by_distance_bin','03_correlations','04_extreme_error_rates','05_risk_diagnostics','06_good_match_failures','07_conditional_correlations']:lines.extend([f'![{name}](figures/{name}.png)',''])
@@ -376,15 +378,19 @@ def write_report(out,data,corr,risk,groups,metadata):
 def run(args):
     out=args.output_dir;out.mkdir(parents=True,exist_ok=True);lock=acquire_run_lock(out/'run.lock')
     start=time.perf_counter()
+    references=[e2_reference(args.e2_dir,seed) for seed in [0,1,2]]
     original=json.loads((args.e2_dir/'protocol.json').read_text())
     for name in ['experiments/forecasting/model.py','experiments/forecasting/neighbors.py','experiments/forecasting/smoothing.py']:
-        if file_hash(ROOT/name)!=original['source_sha256'][name]:raise ValueError('E2 numerical core changed')
+        if file_hash(ROOT/name)!=original['source_sha256'][name]:raise ValueError('E2 numerical core changed; rerun E2 in a fresh directory before extracting corrected E5 distances')
     if file_hash(args.e2_dir/'contexts.npz')!=json.loads((args.e2_dir/'context_metadata.json').read_text())['contexts_sha256']:raise ValueError('E2 contexts modified')
     bank_meta=args.e2_dir/'packed/seed_0/metadata.json'
+    x,y=embeddings(args.library,args.cache,k=5,horizon=5)
+    cache_identity=validate_cache(args.cache,x,references[0])
+    del x,y
     if json.loads((args.cache/'metadata.json').read_text())['library_sha256']!=json.loads(bank_meta.read_text())['source_sha256']:
         raise ValueError('Memmap cache is not the original E2 reference bank')
     inputs=[args.e2_dir/'contexts.npz',args.e2_dir/'context_metadata.json',args.panel_dir/'panel.csv',args.panel_dir/'provenance.json',
-        args.e2_dir/'protocol.json',args.library.with_name('metadata.json'),args.cache/'metadata.json',bank_meta]
+        args.e2_dir/'protocol.json',args.library,args.library.with_name('metadata.json'),args.cache/'metadata.json',bank_meta]
     for seed in [0,1,2]:
         folder=args.e2_dir/f'groups/seed_{seed}_N18387_k5'
         completion=json.loads((folder/'complete.json').read_text())
@@ -392,8 +398,11 @@ def run(args):
             if file_hash(folder/name)!=completion['sha256'][name]:raise ValueError('Modified E2 forecast/match table')
             inputs.append(folder/name)
     signature=hashlib.sha256(ast.dump(ast.parse(inspect.getsource(prepare_cases)+'\n'+inspect.getsource(replay_distances))).encode()).hexdigest()
-    identity=dict(rules=RULES,input_sha256={str(p.resolve()):file_hash(p) for p in inputs},extraction_signature=signature,
-        dependencies_sha256={str(p.relative_to(ROOT)):file_hash(p) for p in [ROOT/'experiments/error_analysis/conditions.py',ROOT/'experiments/forecasting/neighbors.py',ROOT/'experiments/error_analysis/library.py']})
+    hashes={str(p.resolve()):file_hash(p) for p in inputs}
+    for reference in references:hashes.update(reference['input_sha256'])
+    identity=dict(version=2,window_filter=WINDOW_FILTER,e2_references=references,cache=cache_identity,
+        rules=RULES,input_sha256=hashes,extraction_signature=signature,
+        dependencies_sha256={str(p.relative_to(ROOT)):file_hash(p) for p in [ROOT/'experiments/error_analysis/conditions.py',ROOT/'experiments/forecasting/neighbors.py',ROOT/'experiments/error_analysis/library.py',ROOT/'experiments/error_analysis/audit.py',ROOT/'experiments/runtime.py']})
     proto=out/'protocol.json'
     if proto.exists():
         saved=json.loads(proto.read_text())
@@ -433,8 +442,8 @@ def run(args):
     # Reuse other seeds' recorded distances; do not claim missing means are known.
     for seed in [1,2]:
         folder=args.e2_dir/f'groups/seed_{seed}_N18387_k5'
-        other_matches=pd.read_csv(folder/'matches.csv.gz').query('m==4422')[KEYS+['median_distance']]
-        other=pd.read_csv(folder/'forecasts.csv.gz').query('m==4422')
+        other_matches=pd.read_csv(folder/'matches.csv.gz',float_precision='round_trip').query('m==4422')[KEYS+['median_distance']]
+        other=pd.read_csv(folder/'forecasts.csv.gz',float_precision='round_trip').query('m==4422')
         other=other.merge(cases[KEYS+['level_scale','split']],on=KEYS,validate='many_to_one').merge(other_matches,on=KEYS,validate='many_to_one')
         other['median_distance_scaled']=other.median_distance/(5*other.level_scale)
         other['normalized_absolute_error']=(other.prediction-other.actual).abs()/other.normalization
@@ -451,7 +460,15 @@ def run(args):
         embargo_cases=int(cases.split.eq('embargo').sum()),first_test_origin=cases.loc[cases.split.eq('test'),'forecast_origin'].min(),
         good_match_threshold=threshold,distance_bin_cuts=cuts.tolist())
     make_plots(out,data,corr,scores,groups,panel);write_report(out,data,corr,scores,groups,metadata)
+    with (out/'report.md').open('a') as stream:
+        stream.write(f'\n## Provenance\n\nE2 v4; filter `{WINDOW_FILTER}`; '
+            f'{cache_identity["rows"]:,} cached windows, zero constant histories. '
+            'Numerical source, packed banks and all reference-group artifact hashes verified for seeds 0/1/2. '
+            'Primary replay checks all 10,000 point forecasts and 2,500 min/median/max distances exactly.\n')
+    if any(file_hash(Path(p))!=sha for p,sha in hashes.items()):raise ValueError('Inputs changed during E5')
     atomic_json(out/'progress.json',dict(status='complete',**metadata,cases_sha256=file_hash(out/'cases.csv'),
+        version=2,window_filter=WINDOW_FILTER,cache=cache_identity,inputs_unchanged=True,
+        protocol_sha256=file_hash(proto),verified_distance_cases=2500,
         analysis_source_sha256=file_hash(Path(__file__)),risk_fits=fits,wall_seconds=time.perf_counter()-start,
         completed_utc=datetime.now(timezone.utc).isoformat(),artifacts_sha256={str(p.relative_to(out)):file_hash(p) for p in [*out.glob('*.csv'),*out.glob('*.csv.gz'),out/'report.md',*out.joinpath('figures').glob('*')]}))
     print('Complete:',out/'report.md')
@@ -459,11 +476,11 @@ def run(args):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output-dir',type=Path,default=ROOT/'outputs/experiment_5')
-    parser.add_argument('--e2-dir',type=Path,default=ROOT/'outputs/experiment_2')
+    parser.add_argument('--output-dir',type=Path,default=ROOT/'outputs/experiment_5_nonconstant_v2')
+    parser.add_argument('--e2-dir',type=Path,default=ROOT/'outputs/experiment_2_nonconstant_v2')
     parser.add_argument('--panel-dir',type=Path,default=ROOT/'outputs/epidemic_panel')
     parser.add_argument('--library',type=Path,default=ROOT/'outputs/reproduction_full/01_synthetic/curves.csv')
-    parser.add_argument('--cache',type=Path,default=ROOT/'outputs/paper_embedding_k5_h4_omit')
+    parser.add_argument('--cache',type=Path,default=ROOT/f'outputs/paper_embedding_k5_h4_omit_{WINDOW_FILTER}')
     parser.add_argument('--execute-notebook',action='store_true')
     args=parser.parse_args()
     if args.execute_notebook:

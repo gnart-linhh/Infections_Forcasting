@@ -17,6 +17,7 @@ import nbformat
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'experiments/forecasting'))
 from run_backtest import parser, run_experiment
+from model import WINDOW_FILTER
 from runtime import atomic_json, file_hash
 from notebooks import execute_notebook
 
@@ -48,7 +49,7 @@ class NotebookTests(unittest.TestCase):
             library.parent.mkdir(parents=True)
             library.write_text('curve_id,step,value\n' + ''.join(f'a,{i},{100*i}\n' for i in range(1,41)))
             atomic_json(selection / 'best_params.json', dict(num_curves=1,k=2,closest=1))
-            atomic_json(selection / 'config.json', dict(profile='custom',initial_points=2,iterations=1,full_search_budget=False))
+            atomic_json(selection / 'config.json', dict(profile='custom',initial_points=2,iterations=1,full_search_budget=False,window_filter='nonconstant_v2'))
             atomic_json(selection / 'checkpoint.json', dict(history=[dict(trial=i) for i in range(3)]))
             atomic_json(selection / 'metadata.json', dict(status='complete',artifacts_sha256={
                 name:file_hash(selection/name) for name in ['best_params.json','best_library/curves.csv']}))
@@ -97,7 +98,7 @@ class NotebookRunnerTests(unittest.TestCase):
                 def no_forecast(*args):
                     self.fail('Notebook execution must not start a forecasting run')
                 namespace = dict(__name__='__main__', __file__=str(path), __doc__='', ROOT=ROOT,
-                    Path=Path, argparse=argparse, SEEDS=[0,1,2],
+                    Path=Path, argparse=argparse, SEEDS=[0,1,2], WINDOW_FILTER=WINDOW_FILTER,
                     LIBRARIES=['rollercoaster','wiggle','seasonal','mixed'],
                     run=no_forecast, worker=no_forecast, smoa_worker=no_forecast)
                 with patch.object(sys, 'argv', [str(path), '--execute-notebook']), patch('notebooks.execute_notebook') as execute:

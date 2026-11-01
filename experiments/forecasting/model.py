@@ -8,6 +8,21 @@ from scipy.interpolate import make_smoothing_spline
 from neighbors import ExactNeighbors
 from smoothing import thin_plate_gcv
 
+WINDOW_FILTER = 'nonconstant_v2'
+
+
+def valid_history_windows(history):
+    """Exclude exactly flat histories, the intent of upstream RowVar(X)>0.
+
+    np.var can be positive for identical float64 values (e.g. six 1e-8s).
+    Compare levels directly: no tolerance that could discard real variation.
+    This is a portable zero-variance test, not bitwise emulation of an R build.
+    """
+    history = np.asarray(history)
+    if history.ndim != 2 or history.shape[1] < 2:
+        raise ValueError('History windows need at least two columns')
+    return np.any(history != history[:, :1], axis=1)
+
 
 def load_library(path: Path, k: int, h: int):
     """Embed each curve separately; k differences require k+1 history levels."""
@@ -31,7 +46,7 @@ def load_library(path: Path, k: int, h: int):
         if len(values) < k + 1 + h:
             continue
         windows = np.lib.stride_tricks.sliding_window_view(np.maximum(values, 1e-8), k + 1 + h)
-        keep = np.var(windows[:, :k+1], axis=1, ddof=1) > 0
+        keep = valid_history_windows(windows[:, :k+1])
         starts = np.flatnonzero(keep) + 1
         diffs = np.diff(windows[keep], axis=1)
         xs.append(diffs[:, :k]); ys.append(diffs[:, k:])

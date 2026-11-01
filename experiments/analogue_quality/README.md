@@ -1,5 +1,9 @@
 # Experiment 5 — Analogue Quality vs Forecast Accuracy
 
+Bản hiện hành dùng **E2 v4 / `nonconstant_v2`**, output mới
+`outputs/experiment_5_nonconstant_v2/`; không resume vào bộ cũ.
+[Report v1 lưu riêng](../../outputs/experiment_5/report.md).
+
 Bổ sung phân tích matching quality–forecast error cho **sMOA**, dùng nguyên bộ
 paper N=18.387 attempts/family, k=5, m=4.422, GAM/GCV, omit bridge, seed0.
 Tập test mô tả giống E2/E4: 50 bang ×50 origins ×4 horizons =10.000 instances.
@@ -19,8 +23,8 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
 .venv/bin/python experiments/analogue_quality/experiment_5.py --execute-notebook
 ```
 
-Runner dùng lại `outputs/experiment_2`, `outputs/epidemic_panel` và memmap
-`outputs/paper_embedding_k5_h4_omit` đang có. Mean top-m distance chưa được lưu
+Runner dùng lại `outputs/experiment_2_nonconstant_v2`, `outputs/epidemic_panel` và memmap
+`outputs/paper_embedding_k5_h4_omit_nonconstant_v2` đang có. Mean top-m distance chưa được lưu
 trong E2 nên truy vấn lại exact L1, kiểm tra nguyên 10.000 point forecasts và
 các min/median/max distances; không sinh synthetic hoặc embedding mới.
 Lần chạy sau dùng `cases.csv` đã xác minh checksum, không query lại nếu inputs
@@ -82,66 +86,46 @@ forecasts còn đối chiếu được; chưa xác minh Python/R numerical parit
 
 ## Output gọn
 
-`outputs/experiment_5/`: protocol/progress/checksums, cases.csv,
+`outputs/experiment_5_nonconstant_v2/`: protocol/progress/checksums, cases.csv,
 instances.csv.gz, correlations.csv, grouped_errors.csv, counterexamples.csv,
 risk_scores.csv, risk_predictions.csv.gz, report.md và figures PNG/SVG.
 Code provenance nhúng trong protocol.json, không nhân bản thư viện/source tree.
 Các input của E2/E4 không bị ghi đè. `progress.json` chỉ complete sau khi đủ
 analysis/report, không dùng log launch làm bằng chứng đã có kết quả.
 
-## Kết quả trên dữ liệu hiện có
+## Kiểm chứng provenance và kết quả hiện hành
 
-Đã chạy đủ 10.000 primary instances, exact replay khớp toàn bộ forecasts cũ.
-Case split: 1.300 train /1.150 test /50 embargo; first test origin 2021-01-23.
-Ngưỡng good match q20=0,034042 (scaled mean L1). Không dùng error/test quantiles
-để đặt ngưỡng.
+Giữ kiểm tra SHA numerical core với E2; không bỏ guard khi code đã thay đổi.
+Runner yêu cầu E2 protocol v4, complete, zero constant histories; xác minh
+packed banks/context/group artifacts của cả ba seeds. Cache phải version 2,
+`nonconstant_v2`, cùng library SHA và số windows với seed 0. Exact replay kiểm
+tra 10.000 points và min/median/max distances của 2.500 cases bằng equality.
+Mean distance được tính từ đúng top-m, không thay matching hoặc thresholds.
 
-| Horizon | Spearman scaled distance vs normalized error | Sau điều chỉnh context |
+Notebook chỉ hiển thị khi complete, protocol/filter, source/input/artifact hashes,
+cache và số targets/cases đều hợp lệ. Correlations, temporal diagnostics và
+figures được sinh cùng lượt; không chép số liệu từ output v1.
+
+Xem [report mới](../../outputs/experiment_5_nonconstant_v2/report.md) và
+[notebook](experiment_5.ipynb) cho kết quả đã xác minh.
+
+Lượt chạy mới đã **complete**: exact replay 10.000 forecasts và 2.500 cases;
+1.300 train / 1.150 test / 50 embargo. Numerical SHA, input/artifact hashes,
+cache `nonconstant_v2` và reference groups của ba seeds đều đã kiểm tra.
+Notebook đã chạy đủ 7 code cells.
+
+| Horizon | Spearman scaled mean distance–normalized error | Sau điều chỉnh context |
 | --- | ---: | ---: |
-| 1 | 0,237 | 0,010 |
-| 2 | 0,239 | 0,006 |
-| 3 | 0,204 | −0,012 |
-| 4 | 0,191 | −0,038 |
+| 1 | 0.237 | 0.010 |
+| 2 | 0.239 | 0.006 |
+| 3 | 0.204 | -0.012 |
+| 4 | 0.191 | -0.038 |
 
-Raw mean L1 với raw absolute error có Spearman khoảng 0,60–0,68; khi chia
-scale cho cả distance/error, association giảm còn 0,19–0,24. Vì vậy không đọc
-raw correlation cao như bằng chứng độc lập của matching quality.
+Distance có association yếu với lỗi; sau điều chỉnh context, association gần zero.
+Incremental held-out AUROC của context+distance so với context-only vẫn nhỏ,
+phụ thuộc horizon; không suy ra good match bảo đảm forecast tốt.
+Xem paired intervals và Brier trong report trước khi diễn giải tín hiệu rủi ro.
 
-Distance thấp có xu hướng đi cùng normalized error thấp, nhưng quan hệ không mạnh và
-phần lớn association biến mất khi kiểm soát mức ca/growth/volatility/history/
-phase trong partial rank analysis. Không diễn giải như causal effect hoặc
-bằng chứng không còn bất kỳ nonlinear signal nào.
-
-Trong **337 good-match test cases**, extreme errors lần lượt là
-10/26/38/46 ở horizons 1/2/3/4 (2,97% /7,72% /11,28% /13,65%). Good distance
-không bảo đảm future giống analogue: South Carolina origin 2021-12-25 có
-scaled distance 0,03153, h4 forecast 9.057,5 trong khi final actual 112.585;
-Nevada cùng origin distance 0,01603, forecast 6.040 vs actual 65.307.
-Hình failure chọn hậu nghiệm các ca sai lớn, không phải một mẫu đại diện.
-
-| Horizon | Test AUROC distance-only | Context-only | Context+distance | Paired delta AUROC 95% CI |
-| --- | ---: | ---: | ---: | --- |
-| 1 | 0,699 | 0,745 | 0,753 | +0,0082 [0,0031; 0,0143] |
-| 2 | 0,657 | 0,661 | 0,660 | −0,0009 [−0,0113; 0,0094] |
-| 3 | 0,664 | 0,648 | 0,650 | +0,0012 [−0,0004; 0,0029] |
-| 4 | 0,660 | 0,666 | 0,651 | −0,0148 [−0,0250; −0,0062] |
-
-Thêm distance chỉ cải thiện ranking nhẹ ở h1 trong split này; h2/h3 không có
-incremental AUROC rõ, h4 giảm. Brier của combined so với context lần lượt
-thay đổi gần 0 /−0,00195 /−0,00048 /+0,00238: ranking và chất lượng xác suất
-không đồng nghĩa. Brier không phải phép đo calibration thuần túy.
-Các CIs không điều chỉnh multiple comparisons; không xem một kết quả tốt
-riêng lẻ là đủ để đặt alert threshold vận hành.
-
-Secondary median-distance correlations ở hai banks khác khoảng 0,19–0,24,
-nhất quán về quy mô association yếu; không mở rộng kết luận mean-distance
-hoặc risk-model performance sang các banks chưa đánh giá mean.
-
-Thông tin rút ra: distance có thể là **một feature chẩn đoán có điều kiện**, nhưng
-không dùng đơn lẻ như chứng nhận forecast đáng tin. Cần giữ context và horizon,
-đọc paired held-out increments và kiểm chứng trên các thời kỳ khác trước khi
-công bố khả năng cảnh báo tổng quát. Đây không phải thay đổi thuật toán sMOA.
-
-Có 7 nhóm hình PNG/SVG, bảng đầy đủ và notebook có outputs; 8 tests kiểm tra
-ties/rank metrics, frozen bins/scaling, joins, replay parity và training labels
-không dùng final future revisions. Checksum/code provenance ở protocol/progress.
+Đối chiếu với v1 xác nhận 10.000 points và toàn bộ min/mean/median distances
+không đổi. Các số trên được tính lại từ v4; giữ nguyên bootstrap, temporal split,
+ngưỡng good-match/extreme và các tiêu chí matching.

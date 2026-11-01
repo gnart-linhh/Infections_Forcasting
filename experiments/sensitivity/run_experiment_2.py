@@ -18,7 +18,8 @@ sys.path.insert(0,str(ROOT/'experiments/forecasting'))
 from runtime import atomic_json,file_hash,acquire_run_lock
 from smoothing import thin_plate_gcv
 from design import configurations,protocol,SEEDS,SEED_OFFSETS
-from library import pack_bank
+from library import pack_bank,reuse_banks
+from model import WINDOW_FILTER
 
 
 def prepare_context(panel_dir,manifest,out):
@@ -69,13 +70,14 @@ def run(args):
     lock=acquire_run_lock(out/'run.lock')
     design=protocol()
     sources=[Path(__file__),Path(__file__).with_name('design.py'),Path(__file__).with_name('library.py'),
-        Path(__file__).with_name('extend_n.py'),
+        Path(__file__).with_name('extend_n.py'),Path(__file__).with_name('analysis.py'),ROOT/'experiments/notebooks.py',
         Path(__file__).with_name('engine.py'),ROOT/'experiments/synthetic/generator.py',ROOT/'experiments/synthetic/bank.py',
         ROOT/'experiments/synthetic/generate_python.py',ROOT/'experiments/forecasting/model.py',
         ROOT/'experiments/forecasting/smoothing.py',ROOT/'experiments/forecasting/neighbors.py',ROOT/'experiments/runtime.py']
     inputs=[args.panel_dir/'panel.csv',args.panel_dir/'provenance.json',args.manifest,
         *[args.manifest.parent/r.truth for r in pd.read_csv(args.manifest).itertuples()]]
-    config=dict(design=design,inputs_sha256={str(p.resolve()):file_hash(p) for p in inputs},
+    reused=reuse_banks(args.reuse_banks_from,out) if args.reuse_banks_from else None
+    config=dict(design=design,reused_banks=reused,inputs_sha256={str(p.resolve()):file_hash(p) for p in inputs},
         source_sha256={str(p.relative_to(ROOT)):file_hash(p) for p in sources},
         packages={name:importlib.metadata.version(name) for name in ['numpy','scipy','pandas','matplotlib']})
     saved=out/'protocol.json'
@@ -83,7 +85,9 @@ def run(args):
         if json.loads(saved.read_text())!=config or not args.resume:raise ValueError('Existing run: require --resume with identical sources/design/inputs')
     else:atomic_json(saved,config)
     for path in sources:
-        target=out/'source_snapshot'/path.relative_to(ROOT);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(path,target)
+        target=out/'source_snapshot'/path.relative_to(ROOT);target.parent.mkdir(parents=True,exist_ok=True)
+        if target.resolve()!=path.resolve():shutil.copy2(path,target)
+    (out/'failure.json').unlink(missing_ok=True)
     status=dict(status='preparing',started_utc=datetime.now(timezone.utc).isoformat(),completed_groups=0,
                 total_groups=3*configurations().groupby(['N','k']).ngroups)
     atomic_json(out/'progress.json',status)
@@ -96,26 +100,30 @@ def run(args):
     groups=list(configurations().groupby(['N','k'],sort=True))
     for seed in SEEDS:
         source=args.reference_library if seed==0 else out/f'libraries/seed_{seed}/curves.csv'
-        if not source.with_name('metadata.json').exists():
-            command=[sys.executable,str(ROOT/'experiments/synthetic/generate_python.py'),'--num-curves','18387',
-                '--seed-offset',str(SEED_OFFSETS[seed]),'--workers',str(args.workers),'--output-dir',str(source.parent)]
-            if source.parent.exists() and any(source.parent.iterdir()):command.append('--resume')
-            subprocess.run(command,check=True,env=env)
         packed=out/f'packed/seed_{seed}'
-        if not (packed/'metadata.json').exists():
-            status.update(status='packing_library',seed=seed);atomic_json(out/'progress.json',status)
-            replay=out/'libraries/seed_0_replay/curves.csv' if seed==0 else None
-            if seed==0 and not replay.with_name('metadata.json').exists():
-                subprocess.run([sys.executable,str(ROOT/'experiments/synthetic/generate_python.py'),
-                    '--seed-offset','0','--workers',str(args.workers),'--output-dir',str(replay.parent)],check=True,env=env)
-            pack_bank(source,packed,SEED_OFFSETS[seed],replay=replay)
-        else:
-            meta=json.loads((packed/'metadata.json').read_text())
-            if file_hash(source)!=meta['source_sha256'] or file_hash(packed/'curves.npz')!=meta['packed_sha256'] or file_hash(packed/'attempts.npz')!=meta['attempts_sha256']:
-                raise ValueError('Modified packed library/source')
+        if not args.reuse_banks_from:
+            if not source.with_name('metadata.json').exists():
+                command=[sys.executable,str(ROOT/'experiments/synthetic/generate_python.py'),'--num-curves','18387',
+                    '--seed-offset',str(SEED_OFFSETS[seed]),'--workers',str(args.workers),'--output-dir',str(source.parent)]
+                if source.parent.exists() and any(source.parent.iterdir()):command.append('--resume')
+                subprocess.run(command,check=True,env=env)
+            packed=out/f'packed/seed_{seed}'
+            if not (packed/'metadata.json').exists():
+                status.update(status='packing_library',seed=seed);atomic_json(out/'progress.json',status)
+                replay=out/'libraries/seed_0_replay/curves.csv' if seed==0 else None
+                if seed==0 and not replay.with_name('metadata.json').exists():
+                    subprocess.run([sys.executable,str(ROOT/'experiments/synthetic/generate_python.py'),
+                        '--seed-offset','0','--workers',str(args.workers),'--output-dir',str(replay.parent)],check=True,env=env)
+                pack_bank(source,packed,SEED_OFFSETS[seed],replay=replay)
+            else:
+                meta=json.loads((packed/'metadata.json').read_text())
+                if file_hash(source)!=meta['source_sha256'] or file_hash(packed/'curves.npz')!=meta['packed_sha256'] or file_hash(packed/'attempts.npz')!=meta['attempts_sha256']:
+                    raise ValueError('Modified packed library/source')
         for (n,k),group in groups:
             job_packed=packed
-            if n>18387:
+            if n>18387 and args.reuse_banks_from:
+                job_packed=out/f'amendments/N{n}/packed/seed_{seed}'
+            elif n>18387:
                 from extend_n import extend_bank
                 job_packed=out/f'amendments/N{n}/packed/seed_{seed}'
                 parent=packed;base_n=18387
@@ -126,6 +134,9 @@ def run(args):
             job=out/f'groups/seed_{seed}_N{n}_k{k}'
             if (job/'complete.json').exists():
                 completion=json.loads((job/'complete.json').read_text())
+                runtime=json.loads((job/'runtime.json').read_text())
+                if runtime.get('window_filter')!=WINDOW_FILTER or runtime.get('constant_history_rows')!=0:
+                    raise ValueError('Completed group uses an outdated/invalid embedding filter')
                 for name,expected in completion['sha256'].items():
                     if file_hash(job/name)!=expected:raise ValueError('Modified completed group artifact')
             if not (job/'complete.json').exists():
@@ -144,14 +155,23 @@ def run(args):
     if extension_stats:pd.DataFrame(extension_stats).to_csv(out/'extension_generation.csv',index=False)
     from analysis import analyze
     analyze(out)
-    status.update(status='complete',finished_utc=datetime.now(timezone.utc).isoformat())
+    for name,digest in {**config['inputs_sha256'],**(reused['sha256'] if reused else {})}.items():
+        if file_hash(Path(name))!=digest:raise ValueError('Input changed during E2')
+    status.update(status='complete',window_filter=WINDOW_FILTER,inputs_unchanged=True,
+                  notebook_status='running' if args.notebook_path else 'not_requested',finished_utc=datetime.now(timezone.utc).isoformat())
     atomic_json(out/'progress.json',status)
+    if args.notebook_path:
+        from notebooks import execute_notebook
+        execute_notebook(args.notebook_path,working_dir=args.notebook_path.resolve().parents[2],timeout=1200)
+        status['notebook_status']='complete';atomic_json(out/'progress.json',status)
     print('Complete:',out/'report.md',flush=True)
 
 
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--output-dir',type=Path,default=ROOT/'outputs/experiment_2')
+    p.add_argument('--output-dir',type=Path,default=ROOT/'outputs/experiment_2_nonconstant_v2')
+    p.add_argument('--reuse-banks-from',type=Path,help='Verified existing E2 banks and N22k/N30k extensions, linked without copying')
+    p.add_argument('--notebook-path',type=Path,help='Execute this existing notebook after verification')
     p.add_argument('--panel-dir',type=Path,default=ROOT/'outputs/epidemic_panel')
     p.add_argument('--manifest',type=Path,default=ROOT/'outputs/truth_states/manifest.csv')
     p.add_argument('--reference-library',type=Path,default=ROOT/'outputs/reproduction_full/01_synthetic/curves.csv')
@@ -161,4 +181,7 @@ if __name__=='__main__':
     try:run(a)
     except Exception as exc:
         atomic_json(a.output_dir/'failure.json',dict(type=type(exc).__name__,reason=str(exc)))
+        state_path=a.output_dir/'progress.json'
+        state=json.loads(state_path.read_text()) if state_path.exists() else {}
+        state.update(status='failed',error=str(exc));atomic_json(state_path,state)
         raise

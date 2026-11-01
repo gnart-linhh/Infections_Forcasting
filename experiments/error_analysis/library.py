@@ -9,7 +9,9 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'experiments'))
+sys.path.insert(0, str(ROOT/'experiments/forecasting'))
 from runtime import atomic_json, file_hash, acquire_run_lock
+from model import WINDOW_FILTER, valid_history_windows
 
 
 def embeddings(source, out, k=5, horizon=4):
@@ -19,12 +21,13 @@ def embeddings(source, out, k=5, horizon=4):
 
 
 def _embeddings(source,out,k,horizon):
-    config = dict(version=1, library_sha256=file_hash(source), k=k, horizon=horizon)
+    config = dict(version=2, window_filter=WINDOW_FILTER, library_sha256=file_hash(source), k=k, horizon=horizon)
     info = out/'metadata.json'
     if info.exists():
         meta = json.loads(info.read_text())
         if any(meta.get(key) != value for key, value in config.items()):
-            raise ValueError('Embedding cache differs from requested source/configuration')
+            raise ValueError('Embedding cache differs from requested source/configuration; '
+                             'use a new cache directory for nonconstant_v2; keep old run artifacts unchanged')
         for name, width in [('x',k), ('y',horizon)]:
             if (out/f'{name}.dat').stat().st_size != meta['rows']*width*8:
                 raise ValueError('Incomplete embedding cache')
@@ -45,7 +48,7 @@ def _embeddings(source,out,k,horizon):
                     raise ValueError(f'Invalid curve values: {curve_id}')
                 if len(values) >= k+1+horizon:
                     windows = np.lib.stride_tricks.sliding_window_view(np.maximum(values,1e-8), k+1+horizon)
-                    keep = np.var(windows[:,:k+1],axis=1,ddof=1)>0
+                    keep = valid_history_windows(windows[:,:k+1])
                     diff = np.diff(windows[keep],axis=1)
                     np.ascontiguousarray(diff[:,:k],dtype='<f8').tofile(xf)
                     np.ascontiguousarray(diff[:,k:],dtype='<f8').tofile(yf)

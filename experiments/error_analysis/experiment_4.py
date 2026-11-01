@@ -19,13 +19,18 @@ from model import forecast
 from neighbors import ExactNeighbors
 from conditions import RULES, features, errors
 from library import embeddings
+from model import WINDOW_FILTER
 from report import report
+from audit import e2_reference, compare_reference, validate_cache
 
 
 def run(args):
     out=args.output_dir.resolve()
     out.mkdir(parents=True,exist_ok=True)
     lock=acquire_run_lock(out/'run.lock')
+    reference=e2_reference(args.e2_dir)
+    if args.bridge_mode!='omit' or args.allow_incomplete:
+        raise ValueError('E2 v4 synchronization requires omit bridge and the complete panel')
     provenance=json.loads((args.panel_dir/'provenance.json').read_text())
     if provenance['status']!='complete' and not args.allow_incomplete:
         raise ValueError('Historical panel is incomplete; fetch it first or explicitly --allow-incomplete')
@@ -50,10 +55,15 @@ def run(args):
     source_paths=[Path(__file__),Path(__file__).with_name('conditions.py'),Path(__file__).with_name('library.py'),
                   Path(__file__).with_name('report.py'),ROOT/'experiments/forecasting/model.py',
                   ROOT/'experiments/forecasting/smoothing.py',ROOT/'experiments/forecasting/neighbors.py',
-                  ROOT/'experiments/runtime.py']
+                  ROOT/'experiments/runtime.py',Path(__file__).with_name('audit.py')]
     rules=deepcopy(RULES)
     rules['smoa']['bridge_mode']=args.bridge_mode
-    config=dict(rules=rules, panel_sha256=provenance['panel_sha256'],
+    inputs=[args.panel_dir/'panel.csv',args.panel_dir/'provenance.json',args.manifest,
+            args.library,args.library.with_name('metadata.json')]
+    inputs.extend(args.manifest.parent/r.truth for r in truth_manifest.itertuples())
+    input_hashes={**reference['input_sha256'],**{str(p.resolve()):file_hash(p) for p in inputs}}
+    config=dict(version=4,window_filter=WINDOW_FILTER,e2_reference=reference,input_sha256=input_hashes,
+                rules=rules, panel_sha256=provenance['panel_sha256'],
                 panel_provenance_sha256=file_hash(args.panel_dir/'provenance.json'),
                 panel_complete=provenance['status']=='complete', library_sha256=library_hash,
                 library_accepted=library_meta['accepted_total'], library_attempted=library_meta['attempted_total'],
@@ -73,10 +83,13 @@ def run(args):
     atomic_json(out/'progress.json',progress)
     start=time.perf_counter()
     omit=args.bridge_mode=='omit'
-    cache=args.embedding_cache or ROOT/('outputs/paper_embedding_k5_h4_omit' if omit else 'outputs/paper_embedding_k5_h4')
+    cache=args.embedding_cache or ROOT/('outputs/paper_embedding_k5_h4'+('_omit' if omit else '')+'_'+WINDOW_FILTER)
     # Embed one extra future difference, then omit the history/future bridge,
     # exactly as forecasting.embedding_cache.load_cached_library does in full.
     x,y=embeddings(args.library,cache,horizon=4+int(omit))
+    cache_identity=validate_cache(cache,x,reference)
+    bank=json.loads((args.e2_dir/'packed/seed_0/metadata.json').read_text())
+    if bank['source_sha256']!=library_hash:raise ValueError('E4 library differs from E2 reference')
     if omit:y=y[:,1:]
     index=ExactNeighbors(x,workers=1)
     setup_seconds=time.perf_counter()-start
@@ -88,6 +101,7 @@ def run(args):
     expected_origins=provenance['available_origins']
     if origins!=sorted(expected_origins):
         raise ValueError('Panel calendar differs from provenance')
+    if len(origins)!=50 or len(truths)!=50:raise ValueError('Require 50 origins and 50 states')
     progress.update(status='forecasting',total_cases=len(origins)*len(truths))
     cases=[]
     checkpoint=out/'checkpoints'
@@ -138,12 +152,24 @@ def run(args):
             rows.append(dict(base,model='Original_sMOA_Python',horizon=h,target_end_date=target,prediction=pred,actual=actual))
     if not rows: raise ValueError('No valid forecasts to evaluate')
     evaluated=errors(pd.DataFrame(rows))
+    expected=pd.read_csv(args.e2_dir/'groups/seed_0_N18387_k5/forecasts.csv.gz',float_precision='round_trip').query('m==4422')
+    parity=compare_reference(evaluated,expected)
     evaluated.to_csv(out/'instances.csv',index=False)
     progress.update(status='reporting')
     atomic_json(out/'progress.json',progress)
     report(evaluated,status,panel,out,config,truths=truths)
+    with (out/'report.md').open('a') as stream:
+        stream.write('\n## E2 v4 synchronization\n\n'
+            f'Filter `{WINDOW_FILTER}`; cache {len(x):,} windows, zero constant histories. '
+            'All 10,000 independently computed point forecasts and actuals exactly match the '
+            'E2 v4 seed-0 reference (N=18,387, k=5, m=4,422). '
+            'Protocol, input, numerical source and artifact SHA-256 checks are recorded in protocol.json/progress.json.\n')
+    if any(file_hash(Path(p))!=sha for p,sha in input_hashes.items()):raise ValueError('Inputs changed during E4')
     progress.update(status='complete',finished_utc=datetime.now(timezone.utc).isoformat(),
                     setup_seconds=setup_seconds,forecast_count=len(evaluated),
+                    version=4,window_filter=WINDOW_FILTER,e2_parity=parity,cache=cache_identity,inputs_unchanged=True,
+                    protocol_sha256=file_hash(config_path),
+                    artifacts_sha256={str(p.relative_to(out)):file_hash(p) for p in [*out.glob('*.csv'),out/'report.md',*out.joinpath('figures').glob('*')]},
                     artifacts=['instances.csv','case_status.csv','overall.csv','report.md','figures/'])
     atomic_json(out/'progress.json',progress)
     print(pd.read_csv(out/'overall.csv')[['model','n','MAE','RMSE','normalized_MAE','bias','extreme_rate']].to_string(index=False),flush=True)
@@ -157,7 +183,8 @@ if __name__=='__main__':
     parser.add_argument('--library',type=Path,default=ROOT/'outputs/reproduction_full/01_synthetic/curves.csv')
     parser.add_argument('--embedding-cache',type=Path)
     parser.add_argument('--bridge-mode',choices=['omit','keep'],default='omit')
-    parser.add_argument('--output-dir',type=Path,default=ROOT/'outputs/experiment_4_omit')
+    parser.add_argument('--output-dir',type=Path,default=ROOT/'outputs/experiment_4_nonconstant_v2')
+    parser.add_argument('--e2-dir',type=Path,default=ROOT/'outputs/experiment_2_nonconstant_v2')
     parser.add_argument('--allow-incomplete',action='store_true')
     parser.add_argument('--resume',action='store_true')
     args=parser.parse_args()

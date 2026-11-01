@@ -1,14 +1,24 @@
 # Infections Forcasting — full Python SMOA reproduction
 
+Full paper `nonconstant_v2` + UQ matured đã hoàn tất 22.400 targets tại
+`outputs/paper_full_nonconstant_v2_matured/`, BO ở `outputs/bo_gam_nonconstant_v2/`
+(4 workers, ngân sách 104 evaluations, đang chạy), full winner tự chờ ở
+`outputs/bo_gam_full_nonconstant_v2_matured/`. UQ full dùng matured như main R. Theo dõi bằng
+`experiments/status.py --output-dir <folder>`; log/source snapshot/resume commands
+được giữ trong outputs.
+
+**Audit 2026-11-01:** code mới dùng `nonconstant_v2`, loại history hoàn toàn phẳng. Các kết quả/outputs/notebook đã lưu bên dưới vẫn thuộc NumPy filter v1; full nonconstant_v2/matured đã complete; BO nonconstant_v2 vẫn đang chạy. [Đối chiếu R, số lượng windows và phạm vi ảnh hưởng](REPRODUCTION_AUDIT.md). Dùng output/cache directory mới; không resume run v1 bằng code mới.
+
 Pipeline: **synthetic → Bayesian optimization → UQ → prediction → evaluation**.
 Chỉ dùng Python; không cần R, SLURM hoặc đưa checkout `precog/` vào repo này.
 
 Run full với bộ paper hiện tại: [hướng dẫn và phạm vi](experiments/reproduction/FULL.md),
-[notebook](experiments/reproduction/full.ipynb), outputs `outputs/paper_full/`.
-50 bang × **112 origins hàng tuần** × 4 horizons, dùng snapshot lịch sử.
-Full hiện **bỏ bridge + UQ hồi cứu có future labels** theo yêu cầu. BO đã hoàn
-tất 104 lượt; `outputs/bo_gam_full/` chạy winner trên cùng test và quy ước để
-so với bộ paper. Không gọi WIS/coverage của nhánh full này là real-time.
+[notebook](experiments/reproduction/full.ipynb), outputs
+`outputs/paper_full_nonconstant_v2_matured/`. 50 bang ×112 origins ×4 horizons,
+historical history, **omit bridge + UQ matured**. Maturity filtering khớp
+`run_smoa.R`; frozen warmup/final revisions vẫn hồi cứu, chưa gọi là fully causal.
+Lượt hồi cứu trước ở `outputs/paper_full_nonconstant_v2/` được giữ riêng.
+BO mới tiếp tục đủ 104 lượt; full winner tự chờ và dùng cùng policy matured.
 
 ## Experiment 0 — đối chiếu paper
 

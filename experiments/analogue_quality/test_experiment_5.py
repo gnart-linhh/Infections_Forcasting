@@ -72,6 +72,8 @@ class AnalogueQualityTests(unittest.TestCase):
         self.assertTrue(result.mean_distance.eq(2.5).all())
         with self.assertRaisesRegex(ValueError,'point differs'):
             replay_distances(cases,contexts,x,y,matches,forecasts.assign(prediction=-1),m=2)
+        with self.assertRaisesRegex(ValueError,'distance differs'):
+            replay_distances(cases,contexts,x,y,matches.assign(median_distance=np.nextafter(2.5,3.)),forecasts,m=2)
 
     def test_risk_training_uses_historical_vintage_not_future_final_labels(self):
         rows=[];panel=[]

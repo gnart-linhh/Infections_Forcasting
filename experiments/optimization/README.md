@@ -1,5 +1,18 @@
 # Bước 2 — full Bayesian optimization
 
+Lượt mới đã khởi chạy ở `outputs/bo_gam_nonconstant_v2/02_optimization`;
+log và lệnh resume trong `outputs/bo_gam_nonconstant_v2/{run.log,launch.json}`.
+Giữ đủ 104 lượt, seed13, all origins và paired synthetic test sau selection.
+Với `--workers 4`, generation, curve-wise GAM preprocessing và exact queries
+dùng nhiều CPU; các LHS/EI objectives vẫn tuần tự. Pool GAM giữ basis cache
+giữa trials, không gửi training embeddings sang workers. Lưới GCV được
+vector hóa; fitted values và GCV/lambda/EDF khớp bitwise bản scalar trên 26
+histories kiểm tra. Test song song/tuần tự kiểm tra cùng từng record và MAE.
+Microbenchmark warm-basis khoảng 0,053s → 0,008s; không suy tỷ lệ tăng tốc
+toàn BO từ con số này. BLAS mỗi process một thread, hạn chế oversubscription.
+
+**Audit 2026-11-01:** code mới dùng `nonconstant_v2`, loại history hoàn toàn phẳng. Các kết quả/outputs/notebook đã lưu bên dưới vẫn thuộc NumPy filter v1; lượt full/BO nonconstant_v2 đã khởi chạy riêng và chưa hoàn tất. [Đối chiếu R, số lượng windows và phạm vi ảnh hưởng](../../REPRODUCTION_AUDIT.md). Dùng output/cache directory mới; không resume run v1 bằng code mới.
+
 Mặc định chạy **99 Latin hypercube + 5 Expected Improvement = 104 evaluations**.
 Không có profile `small`. Miền: `num_curves=10000..30000` mỗi family,
 `k=2..7`, `closest=1000..6000`; 3 families, h=4.
@@ -7,7 +20,7 @@ Không có profile `small`. Miền: `num_curves=10000..30000` mỗi family,
 ```bash
 .venv/bin/python -u experiments/optimization/run_optimization.py \
   --workers 4 --seed 13 \
-  --output-dir outputs/reproduction_gam_full/02_optimization
+  --output-dir outputs/bo_gam_nonconstant_v2/02_optimization
 ```
 
 Lệnh trên chạy riêng bước BO. Thường dùng entrypoint [toàn pipeline](../../README.md)

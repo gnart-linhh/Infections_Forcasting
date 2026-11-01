@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 from runtime import atomic_json, file_hash, acquire_run_lock
 from neighbors import ExactNeighbors
+from model import WINDOW_FILTER, valid_history_windows
 from experiments.sensitivity.library import embed
 from bank import FAMILIES, load_packed
 from experiments.exploration.synthetic_eda import curve_metrics
@@ -36,11 +37,14 @@ CURVES, WINDOWS = 15000, 3000000
 DRAW_SEED = 20261103
 KEYS = ['series', 'forecast_origin', 'target_end_date', 'horizon']
 RULES = dict(
+    version=2,
+    window_filter=WINDOW_FILTER,
     parameters=dict(attempts_per_family=N, k=K, m=M, h=H, smoothing='gam', bridge='omit'),
     libraries=LIBRARIES, regimes=REGIMES, seeds=SEEDS, generator_offsets=[0, 1000000, 2000000],
     cohort='unchanged E2/E4: all 50 states, 50 scheduled origins, 4 horizons; 10000 targets per bank/config',
     full='all accepted curves from original 18387 attempts/family; mixed is the unchanged three-family bank',
-    equal_curves='15000 accepted curves per library; mixed = 5000 per family, nested in each single-family selection',
+    equal_curves='15000 accepted curves with at least one valid window; mixed = 5000 per family, nested in each single-family selection',
+    reference='all 30000 full-mixed E3 points independently recomputed and compared exactly against current E2, not copied',
     equal_windows='3000000 valid windows per library; mixed = 1000000 per family, nested in single-family window selections',
     sampling='uniform without replacement, independent of COVID features/outcomes; sorted original source order for deterministic ties',
     sampling_rng=f'NumPy SeedSequence([{DRAW_SEED},bank_seed,family_index,kind]); kind=0 curves, kind=1 windows',
@@ -52,19 +56,20 @@ RULES = dict(
     aggregation='MAE and RMSE per seed; primary summary = mean and sample SD of seed-specific metrics, not pooled RMSE',
     paired='each single family minus same-regime mixed, average paired errors over three banks; whole-state bootstrap 500 draws',
     morphology='existing EDA peak rule: centered median3, prominence 10% amplitude, separation 4 original steps; cadence stratified',
-    constant_windows='preserve original np.var(ddof=1)>0 criterion, including floating-point retention of exactly constant histories; quantify per library',
+    constant_windows='nonconstant_v2: exclude exactly constant histories without a floating-point variance or tolerance',
     scope='point forecasting only; no BO, UQ, new generator or COVID-driven model selection',
     interpretation='three seeds are descriptive; matched regimes vary generator AND independent subsampling randomness; no claim of infinite-seed stability',
 )
 
 
-def select_curves(family_codes, seed, library):
+def select_curves(family_codes, seed, library, eligible=None):
     """Uniform accepted-curve control; mixed quotas are subsets of the single selections."""
     result = []
     for family in range(3):
         if library != 'mixed' and LIBRARIES[family] != library:
             continue
         candidates = np.flatnonzero(np.asarray(family_codes) == family)
+        if eligible is not None:candidates=candidates[np.asarray(eligible,dtype=bool)[candidates]]
         if len(candidates) < CURVES:
             raise ValueError('Not enough accepted curves for prespecified control')
         rng = np.random.default_rng(np.random.SeedSequence([DRAW_SEED, seed, family, 0]))
@@ -94,7 +99,7 @@ def aggregate(last, future):
 
 def engine_signature():
     tree = ast.parse(Path(__file__).read_text())
-    names = ['select_curves', 'select_windows', 'aggregate', 'worker', 'save_run', 'replay_full', 'prepare_cases', 'curve_statistics']
+    names = ['select_curves', 'select_windows', 'aggregate', 'worker', 'save_run', 'reference_identity', 'verify_reference', 'prepare_cases', 'curve_statistics']
     content = [ast.dump(node, include_attributes=False) for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
     return hashlib.sha256(json.dumps([RULES, content], sort_keys=True).encode()).hexdigest()
 
@@ -165,6 +170,7 @@ def worker(args):
     if library != 'mixed':
         keep = np.flatnonzero(families == LIBRARIES.index(library))
         curves = [curves[i] for i in keep]; ids = ids[keep]
+    input_accepted=len(curves)
     scratch = out/'scratch'
     x, y, codes = embed(curves, ids, K, scratch, h=H)
     del curves
@@ -173,6 +179,7 @@ def worker(args):
                           (seed,) if library == 'mixed' else (seed, library)).fetchone()[0]
     if len(x) != expected:
         raise ValueError('Embedding count differs from morphology audit')
+    represented=np.unique(codes);eligible=np.flatnonzero(np.isin(ids,represented))
     with np.load(args.e2_dir/'contexts.npz', allow_pickle=False) as raw:
         ctx = {name:raw[name] for name in ['last', 'query_k5']}
     case_table = pd.read_sql_query('SELECT * FROM cases ORDER BY case_id', db)
@@ -183,7 +190,7 @@ def worker(args):
             selected = None; xx, yy, selected_codes = x, y, codes
         else:
             if regime == 'equal_curves':
-                chosen = select_curves((ids-1)//N, seed, library)
+                chosen = select_curves((ids-1)//N, seed, library,eligible=np.isin(ids,represented))
                 selected = np.flatnonzero(np.isin(codes, ids[chosen]))
             else:
                 selected = select_windows(codes, seed, library)
@@ -196,6 +203,7 @@ def worker(args):
         family_counts = {name:int(np.sum((unique_ids-1)//N == f)) for f, name in enumerate(LIBRARIES[:3])}
         window_counts = {name:int(np.sum((np.asarray(selected_codes, dtype=np.int64)-1)//N == f)) for f, name in enumerate(LIBRARIES[:3])}
         constant = int(np.count_nonzero(np.all(xx == 0, axis=1)))
+        if constant:raise ValueError('nonconstant_v2 retained a constant history')
         selection_hash = hashlib.sha256((ids.tobytes() if selected is None else np.asarray(selected, dtype='<i8').tobytes())).hexdigest()
         index = ExactNeighbors(xx, workers=1)
         predictions, matching = [], []
@@ -206,9 +214,12 @@ def worker(args):
                 predictions.extend((j, h, float(p)) for h, p in enumerate(point, 1))
                 matching.append((j, float(distance[0]), float(np.median(distance)), float(distance[-1])))
         metadata = dict(accepted_curves=len(unique_ids), valid_windows=len(xx), family_curves=family_counts,
+            input_accepted_curves=input_accepted,eligible_window_curves=len(eligible),zero_window_curves=input_accepted-len(eligible),
             family_windows=window_counts, constant_history_windows=constant, constant_fraction=constant/len(xx),
-            selection_sha256=selection_hash, reused=False, seed=seed, regime=regime, library=library,
+            selection_sha256=selection_hash, reused=False, window_filter=WINDOW_FILTER, seed=seed, regime=regime, library=library,
             seconds=time.perf_counter()-tick, group_seconds=time.perf_counter()-start)
+        if regime=='full' and library=='mixed':
+            metadata['reference_targets_checked']=verify_reference(args.e2_dir,seed,case_table,predictions,matching,db)
         save_run(db, seed, regime, library, predictions, matching, metadata)
         print(f'Completed seed={seed} {regime}/{library}: C={len(unique_ids):,}, M={len(xx):,}', flush=True)
         del index, xx, yy, selected_codes, unique_ids, selected
@@ -263,7 +274,7 @@ def curve_statistics(e2, seed, db):
     for curve, ident, family in zip(curves, ids, families):
         v = np.maximum(curve.ts, 1e-8)
         windows = np.lib.stride_tricks.sliding_window_view(v, K+H+2)[:, :K+1] if len(v) >= K+H+2 else np.empty((0, K+1))
-        valid = np.var(windows, axis=1, ddof=1)>0
+        valid = valid_history_windows(windows)
         constant = int(np.sum(valid & (np.ptp(windows, axis=1)==0)))
         stats = curve_metrics(curve.ts)
         rows.append((seed, int(ident), LIBRARIES[int(family)], curve.time_cadence, curve.scale,
@@ -275,41 +286,61 @@ def curve_statistics(e2, seed, db):
     print(f'Morphology audited: seed={seed}, {len(rows):,} curves', flush=True)
 
 
-def replay_full(e2, seed, cases, db):
-    if db.execute("SELECT COUNT(*) FROM runs WHERE seed=? AND regime='full' AND library='mixed'", (seed,)).fetchone()[0]:
-        return
-    folder = e2/f'groups/seed_{seed}_N18387_k5'
-    f = pd.read_csv(folder/'forecasts.csv.gz', float_precision='round_trip').query('m==4422').copy()
-    matches = pd.read_csv(folder/'matches.csv.gz', float_precision='round_trip').query('m==4422').copy()
-    case_keys = cases[['case_id', 'series', 'forecast_origin']]
-    f = f.merge(case_keys, on=['series','forecast_origin'], validate='many_to_one')
-    obs = pd.read_sql_query('SELECT * FROM observations', db)
-    f = f.merge(obs, on=['case_id','horizon','target_end_date'], suffixes=('', '_stored'), validate='one_to_one')
-    if len(f) != 10000 or not np.array_equal(f.actual, f.actual_stored):
-        raise ValueError('Reference target/label mismatch')
-    matches = matches.merge(case_keys, on=['series','forecast_origin'], validate='one_to_one')
-    runtime = json.loads((folder/'runtime.json').read_text())
-    meta = dict(accepted_curves=runtime['accepted_curves'], valid_windows=runtime['M'], reused=True,
-                source=str(folder), seconds=None, seed=seed, regime='full', library='mixed')
-    stats = pd.read_sql_query('SELECT family,COUNT(*) AS curves,SUM(valid_windows) AS windows,SUM(constant_windows) AS constant FROM curve_stats WHERE seed=? GROUP BY family', db, params=(seed,))
-    meta.update(family_curves=stats.set_index('family').curves.astype(int).to_dict(),
-        family_windows=stats.set_index('family').windows.astype(int).to_dict(),
-        constant_history_windows=int(stats.constant.sum()), constant_fraction=float(stats.constant.sum()/runtime['M']))
-    if stats.windows.sum() != runtime['M']:
-        raise ValueError('Full mixed audit differs from existing embedding')
-    save_run(db, seed, 'full', 'mixed', list(f[['case_id','horizon','prediction']].itertuples(index=False,name=None)),
-             list(matches[['case_id','minimum_distance','median_distance','maximum_distance']].itertuples(index=False,name=None)), meta)
+def reference_identity(e2,seed):
+    folder=Path(e2)/f'groups/seed_{seed}_N18387_k5'
+    runtime=json.loads((folder/'runtime.json').read_text())
+    if (runtime.get('window_filter')!=WINDOW_FILTER or runtime.get('constant_history_rows')!=0
+            or runtime.get('N')!=N or runtime.get('k')!=K or runtime.get('h')!=H or runtime.get('bridge_mode')!='omit'):
+        raise ValueError('Outdated or incompatible E2 reference; rerun E2 with nonconstant_v2')
+    for name in ['experiments/sensitivity/library.py','experiments/forecasting/model.py',
+                 'experiments/forecasting/smoothing.py','experiments/forecasting/neighbors.py']:
+        if runtime.get('source_sha256',{}).get(name)!=file_hash(ROOT/name):
+            raise ValueError('E2 reference numerical method differs: '+name)
+    if runtime['context_sha256']!=file_hash(Path(e2)/'contexts.npz'):raise ValueError('Reference contexts differ')
+    for name,digest in runtime['packed_sha256'].items():
+        if file_hash(Path(e2)/f'packed/seed_{seed}'/name)!=digest:raise ValueError('Reference bank differs')
+    return runtime
+
+
+def verify_reference(e2,seed,cases,predictions,matches,db):
+    reference_identity(e2,seed)
+    folder=Path(e2)/f'groups/seed_{seed}_N18387_k5'
+    expected=pd.read_csv(folder/'forecasts.csv.gz',float_precision='round_trip').query('m==4422')
+    keys=cases[['case_id','series','forecast_origin']]
+    expected=expected.merge(keys,on=['series','forecast_origin'],validate='many_to_one')
+    observations=pd.read_sql_query('SELECT * FROM observations',db)
+    expected=expected.merge(observations,on=['case_id','horizon','target_end_date'],suffixes=('','_e3'),validate='one_to_one')
+    actual=pd.DataFrame(predictions,columns=['case_id','horizon','point_e3'])
+    checked=expected.merge(actual,on=['case_id','horizon'],validate='one_to_one')
+    if len(checked)!=10000 or not np.array_equal(checked.prediction,checked.point_e3) or not np.array_equal(checked.actual,checked.actual_e3):
+        raise ValueError('Fresh E3 full-mixed predictions do not reproduce E2')
+    distances=pd.read_csv(folder/'matches.csv.gz',float_precision='round_trip').query('m==4422')
+    distances=distances.merge(keys,on=['series','forecast_origin'],validate='one_to_one')
+    fresh=pd.DataFrame(matches,columns=['case_id','minimum_distance','median_distance','maximum_distance'])
+    checked=distances.merge(fresh,on='case_id',suffixes=('_e2','_e3'),validate='one_to_one')
+    if len(checked)!=2500 or any(not np.array_equal(checked[f'{name}_e2'],checked[f'{name}_e3'])
+                               for name in ['minimum_distance','median_distance','maximum_distance']):
+        raise ValueError('Fresh E3 full-mixed matching does not reproduce E2')
+    return 10000
 
 
 def validate_inputs(args):
     e2 = args.e2_dir
     paths = [e2/'contexts.npz', e2/'context_metadata.json', args.panel_dir/'panel.csv', args.panel_dir/'provenance.json',
-             ROOT/'outputs/truth_states/manifest.csv']
+             args.manifest,e2/'progress.json',e2/'validation.json']
+    progress=json.loads((e2/'progress.json').read_text());validation=json.loads((e2/'validation.json').read_text())
+    if (progress.get('status')!='complete' or validation.get('window_filter')!=WINDOW_FILTER
+            or validation.get('protocol_version')!=4 or validation.get('constant_history_rows')!=0):
+        raise ValueError('Require complete current nonconstant_v2 E2 results')
     ctx = json.loads((e2/'context_metadata.json').read_text())
     provenance = json.loads((args.panel_dir/'provenance.json').read_text())
     if file_hash(e2/'contexts.npz') != ctx['contexts_sha256'] or file_hash(args.panel_dir/'panel.csv') != provenance['panel_sha256']:
         raise ValueError('E2 contexts or historical panel changed')
     original = json.loads((e2/'protocol.json').read_text())
+    if original['design'].get('window_filter')!=WINDOW_FILTER:raise ValueError('Outdated E2 window filter')
+    for name in ['experiments/sensitivity/library.py','experiments/forecasting/model.py',
+                 'experiments/forecasting/smoothing.py','experiments/forecasting/neighbors.py']:
+        if original['source_sha256'].get(name)!=file_hash(ROOT/name):raise ValueError('E2 numerical method differs: '+name)
     paths.append(e2/'protocol.json')
     for p, digest in original['inputs_sha256'].items():
         if file_hash(Path(p)) != digest:
@@ -330,6 +361,7 @@ def validate_inputs(args):
             raise ValueError('Modified original synthetic bank')
         paths.append(source)
         folder = e2/f'groups/seed_{seed}_N18387_k5'
+        reference_identity(e2,seed)
         complete = json.loads((folder/'complete.json').read_text())
         for name in ['forecasts.csv.gz','matches.csv.gz','runtime.json']:
             if file_hash(folder/name) != complete['sha256'][name]:
@@ -425,6 +457,8 @@ def verify_controls(db):
     if {(s,r,l) for s,r,l,_ in rows} != expected:
         raise ValueError('Missing or unexpected library/seed/size control')
     metadata = {(s,r,l):json.loads(m) for s,r,l,m in rows}
+    filters={m.get('window_filter','numpy_variance_v1') for m in metadata.values()}
+    if filters!={WINDOW_FILTER}:raise ValueError('Results use an outdated or mixed window filter')
     for (seed,regime,lib),m in metadata.items():
         if sum(m['family_curves'].values()) != m['accepted_curves'] or sum(m['family_windows'].values()) != m['valid_windows']:
             raise ValueError('Family counts do not sum to library size')
@@ -434,14 +468,19 @@ def verify_controls(db):
         if regime == 'equal_windows':
             if m['valid_windows'] != WINDOWS or (lib=='mixed' and list(m['family_windows'].values()) != [WINDOWS//3]*3):
                 raise ValueError('Window-count control failed')
-        if not 0 <= m['constant_history_windows'] <= m['valid_windows']:
-            raise ValueError('Invalid constant-history audit')
+        if m['constant_history_windows']!=0:raise ValueError('nonconstant_v2 retained constant histories')
+        if regime=='full' and lib=='mixed' and m.get('reference_targets_checked')!=10000:
+            raise ValueError('Full-mixed E3 has not independently reproduced all E2 targets')
     for seed in SEEDS:
-        for metric in ['accepted_curves','valid_windows','constant_history_windows']:
+        for metric in ['accepted_curves','valid_windows','constant_history_windows','input_accepted_curves','eligible_window_curves','zero_window_curves']:
             if sum(metadata[(seed,'full',lib)][metric] for lib in LIBRARIES[:3]) != metadata[(seed,'full','mixed')][metric]:
                 raise ValueError('Full family union differs from original mixed bank')
-    return dict(size_controls_verified=True,full_family_unions_verified=True,
-                reference_forecasts_reused=30000,new_forecasts=330000)
+    reused=sum(db.execute('SELECT COUNT(*) FROM predictions WHERE seed=? AND regime=? AND library=?',key).fetchone()[0]
+               for key,meta in metadata.items() if meta.get('reused'))
+    total=db.execute('SELECT COUNT(*) FROM predictions').fetchone()[0]
+    return dict(size_controls_verified=True,full_family_unions_verified=True,window_filter=next(iter(filters)),
+                constant_history_windows=0,reference_targets_checked=sum(metadata[(s,'full','mixed')]['reference_targets_checked'] for s in SEEDS),
+                reference_forecasts_reused=reused,new_forecasts=total-reused)
 
 
 def plot_results(out, db, data, summary, comparisons, libraries):
@@ -546,6 +585,14 @@ def write_report(out,summary,comparisons,morphology,libraries,db):
     seasonal = delta.loc[delta.library.eq('seasonal')].set_index('regime')
     phase = summary.loc[summary.regime.eq('equal_windows') & summary.dimension.eq('phase')]
     relative_sd = overall.MAE_sd/overall.MAE_mean
+    stability_notes=[]
+    for regime,g in overall.groupby('regime'):
+        best=g.loc[g.MAE_sd.idxmin()]
+        stability_notes.append(f'{regime}: SD thấp nhất {best.library} ({best.MAE_sd:.3f})')
+    phase_notes=[]
+    for label,g in phase.groupby('group'):
+        nearest=g.loc[g.normalized_NN_mean.idxmin()];accurate=g.loc[g.MAE_mean.idxmin()]
+        phase_notes.append(f'- {label}: NN gần nhất {nearest.library}; MAE thấp nhất {accurate.library}.')
     matching_notes = []
     for regime in REGIMES:
         g = overall.loc[overall.regime.eq(regime)]
@@ -563,10 +610,10 @@ Giữ nguyên sMOA Python: k=5, m=4.422, GAM/GCV, omit bridge, median increments
 ## Thiết kế kiểm soát
 
 1. **full**: toàn bộ accepted curves của 18.387 attempts/family. Mixed giữ nguyên bản ba họ, gồm khoảng 54.000 curves; từng họ khoảng 17.000–18.000. Nhánh này chứa cả ảnh hưởng thành phần và kích thước.
-2. **equal_curves**: 15.000 accepted curves/library; mixed lấy 5.000/họ. Uniform sampling không replacement, không nhìn COVID outcomes. Mixed subsets nằm trong lựa chọn single-family tương ứng.
+2. **equal_curves**: 15.000 accepted curves có ít nhất một valid window/library; mixed lấy 5.000/họ. Uniform sampling không replacement trên eligible curve pool, không nhìn COVID outcomes. Mixed subsets nằm trong lựa chọn single-family tương ứng. Curves không còn window sau nonconstant_v2 được báo riêng; không tính chúng vào ngân sách curves thực sự tham gia matching.
 3. **equal_windows**: đúng 3.000.000 valid matching windows/library; mixed lấy 1.000.000/họ. Giữ m=4.422. Đây là control bổ sung vì cùng số curves vẫn có M khác nhau do độ dài và cửa sổ bị lọc. Window sampling giữ các x/y của segment nguyên vẹn; không sửa generator.
 
-Tất cả chọn mẫu dùng namespace RNG cố định trong protocol, giữ thứ tự nguồn khi có distance ties. Seeds bank=0/1/2, offsets=0/1.000.000/2.000.000. Không dùng phần mở rộng N22k/30k của E2. Không thay generator, không regenerate bank, không chạy BO hay UQ. Ba full-mixed runs tái dùng và kiểm chứng 30.000 predictions của E2; 33 runs còn lại được tính mới.
+Tất cả chọn mẫu dùng namespace RNG cố định trong protocol, giữ thứ tự nguồn khi có distance ties. Seeds bank=0/1/2, offsets=0/1.000.000/2.000.000. Không dùng phần mở rộng N22k/30k của E2. Không thay generator, không regenerate bank, không chạy BO hay UQ. Cả 36 runs được tính lại. Ba full-mixed runs phải khớp chính xác E2 reference trên đủ 30.000 targets và matching distances, sau khi kiểm tra source, bank, contexts và filter. Không sao chép forecasts để gọi là kiểm chứng độc lập.
 
 ![Sizes](figures/size_controls.png)
 
@@ -576,9 +623,9 @@ Tất cả chọn mẫu dùng namespace RNG cố định trong protocol, giữ t
 
 {chr(10).join(winners)}
 
-Full seasonal−mixed chỉ **{seasonal.loc['full','delta_MAE']:+.2f} MAE**, CI [{seasonal.loc['full','lo']:+.2f}, {seasonal.loc['full','hi']:+.2f}] chứa 0: kết quả chưa phân biệt rõ seasonal và full-mixed trên ba banks này. Khi đồng nhất curves, seasonal−mixed là **{seasonal.loc['equal_curves','delta_MAE']:+.2f}**, CI [{seasonal.loc['equal_curves','lo']:+.2f}, {seasonal.loc['equal_curves','hi']:+.2f}]; khi đồng nhất windows là **{seasonal.loc['equal_windows','delta_MAE']:+.2f}**, CI [{seasonal.loc['equal_windows','lo']:+.2f}, {seasonal.loc['equal_windows','hi']:+.2f}]. Vì thế không thể quy lợi thế full-mixed thành “trộn ba họ luôn tốt hơn”.
+Full seasonal−mixed = **{seasonal.loc['full','delta_MAE']:+.2f} MAE**, CI [{seasonal.loc['full','lo']:+.2f}, {seasonal.loc['full','hi']:+.2f}]. Khi đồng nhất eligible curves, seasonal−mixed = **{seasonal.loc['equal_curves','delta_MAE']:+.2f}**, CI [{seasonal.loc['equal_curves','lo']:+.2f}, {seasonal.loc['equal_curves','hi']:+.2f}]; khi đồng nhất windows = **{seasonal.loc['equal_windows','delta_MAE']:+.2f}**, CI [{seasonal.loc['equal_windows','lo']:+.2f}, {seasonal.loc['equal_windows','hi']:+.2f}]. Đọc dấu và CI từ lượt mới; CI qua zero không chứng minh tương đương, và không suy “trộn ba họ luôn tốt hơn” từ một regime.
 
-Relative SD của MAE qua các cấu hình nằm trong **{relative_sd.min():.3%}–{relative_sd.max():.3%}** trên ba seeds này. Mixed có SD nhỏ nhất ở full và equal_windows, nhưng không ở equal_curves. Seed variation nhỏ so với mức MAE không bảo đảm mọi ranking bền vững, nhất là full seasonal và mixed chỉ chênh vài ca MAE.
+Relative SD của MAE qua các cấu hình nằm trong **{relative_sd.min():.3%}–{relative_sd.max():.3%}** trên ba seeds này. {'; '.join(stability_notes)}. Seed variation nhỏ không bảo đảm ranking bền vững; chỉ ba banks và subsets đã khảo sát được quan sát.
 
 MAE/RMSE được tính riêng từng seed, sau đó lấy mean và sample SD của ba scores; RMSE_mean không phải pooled RMSE. Seed SD chỉ mô tả ba banks. Với hai nhánh đồng nhất kích thước, biến thiên gồm cả RNG của bank và subsampling; chưa phân rã hai nguồn này. Bộ test là chung, không có 30.000 targets độc lập chỉ vì lặp ba seeds.
 
@@ -599,7 +646,11 @@ Distance chính = minimum exact L1/(5×mean last6 input đã floor tại 1). Ch�
 
 {chr(10).join(matching_notes)}
 
-Trong equal_windows, mixed match lịch sử gần nhất ở cả ba phase, nhưng seasonal có MAE thấp hơn ở cả ba phase trên trung bình ba banks. Đây là ví dụ trực tiếp rằng minimum distance đo chất lượng biểu diễn history, không đo tính đúng của future analogues. Bảng dưới giữ cùng M để đọc đặc điểm này:
+Trong equal_windows, kết quả theo từng phase của lượt hiện tại:
+
+{chr(10).join(phase_notes)}
+
+Bảng dưới giữ cùng M; không giả định ranking NN/MAE hoặc hướng chênh lệch từ lượt v1:
 
 {markdown_table(phase,['library','group','MAE_mean','normalized_NN_mean'])}
 
@@ -624,7 +675,7 @@ Mỗi curve giữ cadence và scale gốc. Peak rule dùng median3, prominence 1
 ## Kiểm chứng và giới hạn
 
 - Frozen E2 contexts, packed banks, source CSV, original predictions và historical panel đều kiểm tra hashes/provenance; dùng nguyên final truth thô để chấm. Input tại origin floor 1 giống core; negative scoring labels được giữ.
-- Giữ tiêu chí valid windows `np.var(...,ddof=1)>0`. Một số history thật sự constant vẫn vượt tiêu chí do floating-point rounding. Đếm và lưu `constant_history_windows`/fraction trong library_summary.csv; không âm thầm sửa core giữa các ablations. Nearest distance có thể chịu ảnh hưởng của các rows này.
+- Window filter của kết quả này là **{WINDOW_FILTER}**, zero retained constant histories. input_accepted_curves đếm mọi generator-accepted curve; accepted_curves đếm curves thực sự đóng góp windows trong selected library. eligible_window_curves và zero_window_curves báo riêng phần không còn representation. Không so ngân sách 15.000 curves nếu một số curves không thể đóng góp window.
 - Curve equality không đồng nghĩa window equality; window equality không đồng nghĩa số curves hữu ích ngang nhau. Vì vậy báo cả C, M, số windows/curves theo họ và constant fraction cho từng run.
 - Chỉ 3 seeds và một fixed COVID panel; kết quả không đủ khẳng định library tốt nhất cho mọi epidemics. Giữ algorithm/matching, không thiết kế generator mới hoặc tuning trên test.
 - `results.sqlite` lưu curves' morphology, origin features, raw outcomes, từng forecast và từng matching distance; `runs` lưu metadata/selection hashes. Không xuất thêm một bản CSV forecast trùng database. Các tables nhỏ và sáu bộ hình dùng chung trong notebook/report.
@@ -660,6 +711,15 @@ def run(args):
     start = time.perf_counter()
     out = args.output_dir.resolve();out.mkdir(parents=True,exist_ok=True)
     lock = acquire_run_lock(out/'run.lock')
+    if args.wait_for_e2:
+        atomic_json(out/'progress.json',dict(status='waiting_for_e2',e2_dir=str(args.e2_dir)))
+        while True:
+            if (args.e2_dir/'failure.json').exists():raise RuntimeError('E2 failed; inspect its log before resuming E3')
+            path=args.e2_dir/'progress.json'
+            state=json.loads(path.read_text()) if path.exists() else {}
+            if state.get('status')=='failed':raise RuntimeError('E2 failed')
+            if state.get('status')=='complete' and state.get('notebook_status','not_requested') in ['complete','not_requested']:break
+            time.sleep(15)
     prior_progress = json.loads((out/'progress.json').read_text()) if (out/'progress.json').exists() else {}
     inputs = validate_inputs(args)
     signature = engine_signature()
@@ -684,7 +744,6 @@ def run(args):
     env = dict(os.environ,OPENBLAS_NUM_THREADS='1',OMP_NUM_THREADS='1',VECLIB_MAXIMUM_THREADS='1')
     for seed in SEEDS:
         curve_statistics(args.e2_dir,seed,db)
-        replay_full(args.e2_dir,seed,cases,db)
         for library in LIBRARIES:
             status.update(seed=seed,library=library,completed_runs=db.execute('SELECT COUNT(*) FROM runs').fetchone()[0])
             atomic_json(out/'progress.json',status)
@@ -707,13 +766,20 @@ def run(args):
         completed_utc=datetime.now(timezone.utc).isoformat(),
         artifacts_sha256={str(p.relative_to(out)):file_hash(p) for p in [out/'results.sqlite',out/'report.md',*out.glob('*.csv'),*out.joinpath('figures').glob('*')]})
     atomic_json(out/'progress.json',status)
+    if args.notebook_path:
+        from notebooks import execute_notebook
+        execute_notebook(args.notebook_path,working_dir=args.notebook_path.resolve().parents[2],timeout=1200)
+        status['notebook_status']='complete';atomic_json(out/'progress.json',status)
     print('Complete:',out/'report.md',flush=True)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output-dir',type=Path,default=ROOT/'outputs/experiment_3')
-    parser.add_argument('--e2-dir',type=Path,default=ROOT/'outputs/experiment_2')
+    parser.add_argument('--output-dir',type=Path,default=ROOT/'outputs/experiment_3_nonconstant_v2')
+    parser.add_argument('--e2-dir',type=Path,default=ROOT/'outputs/experiment_2_nonconstant_v2')
+    parser.add_argument('--manifest',type=Path,default=ROOT/'outputs/truth_states/manifest.csv')
+    parser.add_argument('--wait-for-e2',action='store_true')
+    parser.add_argument('--notebook-path',type=Path)
     parser.add_argument('--panel-dir',type=Path,default=ROOT/'outputs/epidemic_panel')
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--worker',action='store_true')
@@ -725,4 +791,8 @@ if __name__ == '__main__':
         from notebooks import execute_notebook
         execute_notebook(Path(__file__).with_suffix('.ipynb'), working_dir=ROOT, timeout=600)
     elif args.worker:worker(args)
-    else:run(args)
+    else:
+        try:run(args)
+        except Exception as exc:
+            atomic_json(args.output_dir/'progress.json',dict(status='failed',error=str(exc)))
+            raise

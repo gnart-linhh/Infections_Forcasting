@@ -19,7 +19,11 @@ import pandas as pd
 from scipy.stats import spearmanr, rankdata
 from runtime import atomic_json, file_hash, acquire_run_lock
 from experiments.error_analysis.conditions import features, RULES as CONDITION_RULES
-from experiments.forecasting.uncertainty import QUANTILES, LONG_QUANTILES
+from experiments.forecasting.uncertainty import QUANTILES, LONG_QUANTILES, fit_size
+
+WINDOW_FILTER = 'nonconstant_v2'
+UQ_POLICY = 'matured'
+VERSION = 2
 
 KEYS = ['series', 'forecast_origin', 'target_end_date', 'horizon']
 BOOTSTRAPS = 500
@@ -27,17 +31,18 @@ SEED = 20261102
 HISTORY = ['27–52 weeks', '53–104 weeks', '105+ weeks']
 CALIBRATION = ['24–49 pairs', '50–99 pairs', '100+ pairs']
 RULES = dict(
+    version=VERSION, window_filter=WINDOW_FILTER, uq_policy=UQ_POLICY,
     parameters=dict(N=18387, k=5, m=4422, bridge='omit', smoothing='gam'),
     cohort='50 states x 112 weekly origins x 4 horizons; unchanged paper_full forecasts',
-    UQ='saved NB draws: 5000 per forecast, seed 13, median recentering; no resampling or refitting',
-    policy='figure2_retrospective: final outcomes from earlier-issued forecasts, including not-yet-matured targets',
+    UQ='saved NB draws: 5000 per forecast, seed 13, median recentering; audit refits dispersion without replacing saved intervals',
+    policy='matured: earlier-issued forecasts with target_end_date <= current origin; final revised outcomes',
     warmup='24 earlier weekly origins from frozen 2020-08-15 vintage; retrospective initialization',
     coverage='PRIMARY: lower <= actual <= upper; ALSO source convention lower < actual <= upper',
     WIS='original seven-quantile WIS = 2 * mean(pinball loss), probabilities .025,.1,.25,.5,.75,.9,.975',
     truth='final raw truth, including negative revisions; never floor scoring labels or interval bounds',
     strata=CONDITION_RULES,
     history='full available calendar history: 27–52, 53–104, 105+ weeks; early <=26 explicitly empty',
-    calibration='actual eligible NB pairs: 24–49, 50–99, 100+; all scored forecasts already MLE',
+    calibration='unchanged bins: <24, 24–49, 50–99, 100+ eligible NB pairs; all scored forecasts already MLE',
     width='MPIW in cases; normalized width = width / max(mean(last 4 origin-available floored counts),1)',
     width_error='Spearman per horizon; raw and normalized; partial ranks adjusted for origin context',
     partial_context='log1p(origin level), asinh(growth), volatility, history_weeks, rising/declining indicators',
@@ -100,25 +105,29 @@ def origin_features(archive, origin, expected_dates):
 
 
 def verify_calibration(forecasts, calibration, warmup):
-    """Reconstruct eligible-pair counts, including future targets, without changing NB fits."""
+    """Independently select matured pairs and refit every saved NB size for audit."""
     if calibration.duplicated(['series', 'forecast_origin', 'horizon']).any():
         raise ValueError('Duplicate calibration plan')
-    if not calibration.model.eq('smoa').all() or not calibration.calibration_policy.eq('figure2_retrospective').all():
-        raise ValueError('E6 requires the documented retrospective policy')
+    if not calibration.model.eq('smoa').all() or not calibration.calibration_policy.eq(UQ_POLICY).all():
+        raise ValueError('E6 requires the matured policy')
     if not calibration.method.eq('mle').all():
         raise ValueError('Full reference cohort is expected to be MLE after warmup')
-    joined = forecasts.merge(calibration, on=['series', 'forecast_origin', 'horizon'],
-                             validate='one_to_one', suffixes=('', '_plan'))
-    if len(joined) != len(forecasts):
+    joined = forecasts.merge(calibration, on=['series', 'forecast_origin', 'horizon'], how='left',
+                             validate='one_to_one', suffixes=('', '_plan'), indicator=True)
+    if len(calibration)!=len(forecasts) or not joined._merge.eq('both').all():
         raise ValueError('Missing calibration plan')
+    joined=joined.drop(columns='_merge')
     for left, right in [('nb_size', 'nb_size_plan'), ('calibration_n', 'calibration_n_plan'),
                         ('negative_calibration_excluded', 'excluded_negative')]:
-        if not np.allclose(joined[left], joined[right], atol=1e-10, rtol=1e-12):
+        if not np.array_equal(joined[left], joined[right]):
             raise ValueError(f'Calibration disagreement: {left}')
     prior = pd.concat([warmup, forecasts], ignore_index=True)
-    for h, rows in joined.groupby('horizon'):
-        p = prior.loc[prior.horizon.eq(h)]
-        eligible = p.forecast_origin.to_numpy()[None, :] < rows.forecast_origin.to_numpy()[:, None]
+    if prior.duplicated(KEYS).any():raise ValueError('Duplicate prior calibration pairs')
+    rebuilt = pd.Series(index=joined.index,dtype=float)
+    for (series,h), rows in joined.groupby(['series','horizon']):
+        p = prior.loc[prior.series.eq(series) & prior.horizon.eq(h)]
+        earlier = p.forecast_origin.to_numpy()[None, :] < rows.forecast_origin.to_numpy()[:, None]
+        eligible = earlier & (p.target_end_date.to_numpy()[None,:] <= rows.forecast_origin.to_numpy()[:,None])
         valid = np.isfinite(p.true_value.to_numpy()) & p.true_value.ge(0).to_numpy()
         counts = (eligible & valid).sum(axis=1)
         future = (eligible & valid & (p.target_end_date.to_numpy()[None, :] > rows.forecast_origin.to_numpy()[:, None])).sum(axis=1)
@@ -127,6 +136,15 @@ def verify_calibration(forecasts, calibration, warmup):
                 np.array_equal(future, rows.future_calibration_n) and
                 np.array_equal(negatives, rows.excluded_negative)):
             raise ValueError('Calibration counts/future-label audit failed')
+        for i,row in enumerate(rows.itertuples()):
+            issued=prior.loc[prior.series.eq(series) & prior.forecast_origin.lt(row.forecast_origin)]
+            selected=p.loc[eligible[i] & valid]
+            if len(issued)<24 or selected.empty:raise ValueError('Expected MLE after warmup')
+            size=fit_size(selected.forecast.to_numpy(),selected.true_value.to_numpy())
+            if size!=row.nb_size:raise ValueError(f'Rebuilt NB size differs: {series} {row.forecast_origin} h{h}')
+            rebuilt.at[row.Index]=size
+    if not joined.future_calibration_n.eq(0).all():raise ValueError('Future targets entered matured MLE')
+    joined['nb_size_recomputed']=rebuilt
     return joined
 
 
@@ -138,8 +156,22 @@ def load_reference(source, archive_dir, inputs):
         return pd.read_csv(path, float_precision='round_trip')
 
     config = read(source/'run_config.json')
+    if read(source/'pipeline.json').get('status')!='complete':raise ValueError('Full run is incomplete')
+    if config['method'].get('window_filter')!=WINDOW_FILTER or config['method'].get('uq_policy')!=UQ_POLICY:
+        raise ValueError('Wrong full-run version/filter/UQ policy')
+    snapshot=read(source/'source_snapshot_sha256.json')
+    for name in ['model.py','smoothing.py','neighbors.py','uncertainty.py']:
+        logical='experiments/forecasting/'+name
+        frozen=source/'source_snapshot'/logical
+        read_hash=file_hash(frozen)
+        if read_hash!=snapshot[logical] or file_hash(ROOT/logical)!=read_hash:
+            raise ValueError(f'Full numerical source differs: {logical}')
+        inputs[str(frozen)]=read_hash
+        inputs[logical]=read_hash
+    if file_hash(Path(config['library']))!=config['library_sha256']:raise ValueError('Full library modified')
+    inputs[config['library']]=config['library_sha256']
     policy = read(source/'03_uq/policy.json')
-    if config['parameters'] != dict(N=18387, k=5, m=4422, h=4) or policy['bridge_mode'] != 'omit' or policy['policy'] != 'figure2_retrospective':
+    if config['parameters'] != dict(N=18387, k=5, m=4422, h=4) or policy['bridge_mode'] != 'omit' or policy['policy'] != UQ_POLICY:
         raise ValueError('Wrong full-run parameters or UQ policy')
     if policy['draws'] != 5000 or policy['seed'] != 13:
         raise ValueError('Unexpected NB generation configuration')
@@ -152,15 +184,23 @@ def load_reference(source, archive_dir, inputs):
             raise ValueError('Incomplete or duplicate state targets')
         name = f.series.iloc[0]
         meta = read(folder/'metadata.json')
-        generation = Path(meta['generation_metadata'])
-        if file_hash(generation) != meta['generation_metadata_sha256']:
-            raise ValueError('Generation metadata changed')
-        gen = read(generation)
+        gen=meta
+        if 'generation_metadata' in meta:
+            generation = Path(meta['generation_metadata'])
+            if file_hash(generation) != meta['generation_metadata_sha256']:
+                raise ValueError('Generation metadata changed')
+            gen = read(generation)
+        if gen.get('window_filter')!=WINDOW_FILTER:raise ValueError('State generation filter mismatch')
         cfg = gen['config']
-        if any(cfg[k] != v for k, v in dict(smoothing='gam', bridge_mode='omit', uq_policy='figure2_retrospective',
+        if any(cfg[k] != v for k, v in dict(smoothing='gam', bridge_mode='omit', uq_policy=UQ_POLICY,
                 calibration_truth='final', score_truth='raw', prehistory_mode='frozen', frozen_as_of_date='2020-08-15',
                 k=5, closest=4422, interval_draws=5000, seed=13, history_mode='as_of').items()):
             raise ValueError('Generation protocol mismatch')
+        if gen['sha256'][config['library']]!=config['library_sha256']:raise ValueError('State library differs')
+        for path,sha in gen['sha256'].items():
+            if '/source_snapshot/' in path:
+                if file_hash(Path(path))!=sha:raise ValueError('Generation source snapshot modified')
+                inputs[path]=sha
         entry = manifest.loc[manifest.series.eq(name)].iloc[0]
         archive_path = archive_dir/entry.as_of_truth
         archive = read(archive_path)
@@ -184,6 +224,7 @@ def load_reference(source, archive_dir, inputs):
         if not np.array_equal(arrays['source_covered'][:, 1], f.coverage_95):
             raise ValueError('Upstream coverage convention mismatch')
         f = verify_calibration(f, read(folder/'calibration.csv'), read(folder/'warmup_forecasts.csv'))
+        if not f.dispersion_method.eq(f.method).all():raise ValueError('Dispersion method differs from plan')
         contexts = []
         for origin in sorted(f.forecast_origin.unique()):
             dates = truth.loc[truth.target_end_date.le(origin), 'target_end_date'].tolist()
@@ -202,12 +243,21 @@ def load_reference(source, archive_dir, inputs):
         f['covered_95_inclusive'] = arrays['covered'][:, 1]
         f['negative_actual'] = f.true_value.lt(0)
         states.append(f)
+        print(f'Validated {len(states)}/50 states: {name}; 448 NB sizes refitted',flush=True)
     data = pd.concat(states, ignore_index=True)
     if len(data) != 22400 or data.series.nunique() != 50 or data.forecast_origin.nunique() != 112:
         raise ValueError('Require complete 50-state, 112-origin reference run')
     if data.duplicated(KEYS).any() or not data.groupby(['series', 'forecast_origin']).horizon.apply(lambda s: sorted(s)==[1,2,3,4]).all():
         raise ValueError('Incomplete horizon panel')
     data = data.merge(origins[['forecast_origin', 'data_cutoff', 'issuance_date']], on='forecast_origin', validate='many_to_one')
+    upstream=read(source/'05_evaluation/summary.json')
+    for key,value in [('wis',data.wis.mean()),('mae',data.absolute_error.mean()),('coverage_95',data.coverage_95.mean())]:
+        if not np.isclose(value,upstream['models']['smoa'][key],rtol=1e-12,atol=1e-8):
+            raise ValueError(f'Full evaluation mismatch: {key}')
+    for h,g in data.groupby('horizon'):
+        for key,value in [('wis',g.wis.mean()),('mae',g.absolute_error.mean())]:
+            if not np.isclose(value,upstream['by_horizon'][str(h)]['smoa'][key],rtol=1e-12,atol=1e-8):
+                raise ValueError(f'Full horizon evaluation mismatch: h{h} {key}')
     return data
 
 
@@ -375,7 +425,7 @@ def make_figures(out, data, metrics, calibration, correlations):
     axes[0].set(ylabel='Mean eligible calibration pairs', title='All origins already use MLE')
     axes[1].set(ylabel='Median NB size (log scale)', yscale='log', title='Smaller size: more relative dispersion')
     axes[2].set(ylabel='Mean width / origin case level', title='Width changes with size AND point forecast')
-    fig.suptitle('Retrospective calibration over time; associations are confounded by epidemic waves')
+    fig.suptitle('Matured calibration over time; frozen warmup and final revisions')
     save(fig, 'dispersion_history')
 
     fig, axes = plt.subplots(1, 3, figsize=(13, 4.5), layout='constrained')
@@ -467,7 +517,7 @@ Raw width/error cùng tăng theo quy mô bang nên cần xem normalized và cont
 
 Toàn bộ **{len(data):,}/{len(data):,} fits đã dùng MLE** từ origin đầu tiên nhờ 24 warmup origins. Số eligible pairs tăng từ {data.calibration_n.min()} đến {data.calibration_n.max()}; không có scored initial-size phase để so sánh initial→MLE. Calibration counts, negative exclusions và future counts đều được dựng lại từ warmup/prior forecasts để kiểm tra.
 
-**UQ hồi cứu**: {future:,} fits có ít nhất một target chưa đến hạn; {int(data.future_calibration_n.sum()):,} lượt sử dụng future outcomes, không phải số targets duy nhất. Horizon 1 vẫn dùng final revisions và frozen warmup, nên không được gọi là causal. Không dùng số eligible pairs như số outcomes đã quan sát real-time.
+**UQ policy `matured`**: {future:,} fits có target chưa đến hạn; {int(data.future_calibration_n.sum()):,} lượt sử dụng future targets. Từng calibration count, negative exclusion và NB size đã được dựng lại với forecast_origin < current origin và target_end_date ≤ current origin. Frozen warmup dùng snapshot 15/08/2020 và labels vẫn là final revisions: không được gọi toàn bộ backtest là causal hoặc real-time.
 
 NB trước median-recentering có Var(Y)=μ+μ²/size. Size nhỏ làm relative dispersion lớn hơn ở cùng μ; width còn phụ thuộc point forecast và Monte Carlo draws. Hình và bảng calibration_band mô tả đồng biến qua thời gian, **không chứng minh thêm calibration data tự nó làm interval tốt hơn/hẹp hơn**. Cần controlled ablation cùng origins/means nếu muốn kết luận đó; E6 không thay UQ gốc để tạo một so sánh bị confound.
 
@@ -478,7 +528,7 @@ Thực tế coverage nhóm 24–49 pairs là **{first_n:.2%}**, nhóm ≥100 pai
 
 ## Giới hạn và tái lập
 
-Đây là evaluation của Python reproduction trên dữ liệu gốc đã chuẩn bị, không phải kiểm định numerical parity tuyệt đối với R/paper. UQ hồi cứu có future-label access và frozen warmup. Giữ raw truth, kể cả {int(data.negative_actual.sum())} targets âm; interval bounds sau recentering cũng có thể âm và không bị clip. CI dùng {BOOTSTRAPS} lần bootstrap nguyên bang, seed {SEED}; giữ phụ thuộc theo thời gian trong bang nhưng không mô hình hóa hết đồng biến giữa bang, không hiệu chỉnh multiple comparisons. Bins hiếm có thể không ổn định; luôn đọc số bang/mẫu và CI.
+Đây là evaluation của Python reproduction trên dữ liệu gốc đã chuẩn bị, không phải kiểm định numerical parity tuyệt đối với R/paper. Policy `matured` không đưa targets chưa đến hạn vào MLE; frozen warmup và final revisions vẫn là giới hạn hồi cứu. Giữ raw truth, kể cả {int(data.negative_actual.sum())} targets âm; interval bounds sau recentering cũng có thể âm và không bị clip. CI dùng {BOOTSTRAPS} lần bootstrap nguyên bang, seed {SEED}; giữ phụ thuộc theo thời gian trong bang nhưng không mô hình hóa hết đồng biến giữa bang, không hiệu chỉnh multiple comparisons. Bins hiếm có thể không ổn định; luôn đọc số bang/mẫu và CI.
 
 Input checksums, source code và quy tắc nằm trong protocol.json; summary.json ghi kiểm chứng, software và output checksums. instances.csv.gz chứa từng target, 23 quantiles, origin features, NB size, calibration counts và policy. Notebook chỉ đọc kết quả, không sinh synthetic hoặc chạy lại BO.
 '''
@@ -489,13 +539,15 @@ def run(args):
     start = time.perf_counter()
     out = args.output_dir.resolve(); out.mkdir(parents=True, exist_ok=True)
     lock = acquire_run_lock(out/'run.lock')
+    if (out/'protocol.json').exists():raise ValueError('Use a fresh E6 output directory; do not overwrite or resume older results')
     inputs = {}
     # Freeze the specification and implementation before any E6 scoring.
-    protocol = dict(rules=RULES, created_utc=datetime.now(timezone.utc).isoformat(),
+    protocol = dict(version=VERSION,window_filter=WINDOW_FILTER,uq_policy=UQ_POLICY,
+        reference=str(args.source.resolve()),rules=RULES, created_utc=datetime.now(timezone.utc).isoformat(),
         source={str(Path(__file__).relative_to(ROOT)):Path(__file__).read_text()}, input_sha256=inputs)
     atomic_json(out/'protocol.json', protocol)
     data = load_reference(args.source.resolve(), args.archive.resolve(), inputs)
-    for path in [ROOT/'experiments/error_analysis/conditions.py', ROOT/'experiments/forecasting/uncertainty.py']:
+    for path in [Path(__file__),ROOT/'experiments/runtime.py',ROOT/'experiments/error_analysis/conditions.py', ROOT/'experiments/forecasting/uncertainty.py']:
         inputs[str(path.relative_to(ROOT))] = file_hash(path)
     protocol['input_sha256'] = inputs
     atomic_json(out/'protocol.json', protocol)
@@ -513,9 +565,12 @@ def run(args):
         raise RuntimeError('An input changed during analysis')
     overall = calibration.loc[calibration.dimension.eq('overall') & calibration.level.eq(.95)].iloc[0]
     atomic_json(out/'summary.json', dict(status='complete', forecasts=len(data), cases=len(data)//4, states=50, origins=112,
+        version=VERSION,window_filter=WINDOW_FILTER,uq_policy=UQ_POLICY,reference=str(args.source.resolve()),
+        protocol_sha256=file_hash(out/'protocol.json'), nb_sizes_verified=len(data),full_evaluation_matched=True,
         confidence_levels=11, quantiles_verified=len(data)*23, inputs_unchanged=True,
         WIS=float(data.wis.mean()), MAE=float(data.absolute_error.mean()), coverage95=float(overall.coverage),
         MPIW95=float(overall.MPIW), source_coverage95=float(overall.source_coverage),
+        inclusive_boundary_additions95=int(overall.boundary_additions),future_target_uses=int(data.future_calibration_n.sum()),
         future_label_fits=int(data.future_calibration_n.gt(0).sum()), empty_groups=['history_stage: early <=26 weeks', 'dispersion_method: initial'],
         software={k:importlib.metadata.version(k) for k in ['numpy','scipy','pandas','matplotlib']},
         wall_seconds=time.perf_counter()-start, code_sha256=file_hash(Path(__file__)),
@@ -523,11 +578,32 @@ def run(args):
     print('Complete:', out/'report.md')
 
 
+def validate_outputs(out):
+    """Require current source, matured provenance and verified complete artifacts before display."""
+    out=Path(out);summary=json.loads((out/'summary.json').read_text());protocol=json.loads((out/'protocol.json').read_text())
+    if (summary.get('status')!='complete' or summary.get('version')!=VERSION
+        or protocol.get('version')!=VERSION or summary.get('window_filter')!=WINDOW_FILTER
+        or protocol.get('window_filter')!=WINDOW_FILTER or summary.get('uq_policy')!=UQ_POLICY
+        or protocol.get('uq_policy')!=UQ_POLICY or summary.get('forecasts')!=22400
+        or summary.get('nb_sizes_verified')!=22400 or summary.get('quantiles_verified')!=515200
+        or summary.get('future_label_fits')!=0 or summary.get('future_target_uses')!=0
+        or not summary.get('inputs_unchanged') or not summary.get('full_evaluation_matched')):
+        raise ValueError('Incomplete or stale E6 result/policy/filter/verification')
+    if summary['code_sha256']!=file_hash(Path(__file__)) or summary['protocol_sha256']!=file_hash(out/'protocol.json'):
+        raise ValueError('E6 source/protocol changed')
+    for name,sha in protocol['input_sha256'].items():
+        path=Path(name) if Path(name).is_absolute() else ROOT/name
+        if file_hash(path)!=sha:raise ValueError(f'E6 input/source changed: {name}')
+    for name,sha in summary['artifacts_sha256'].items():
+        if file_hash(out/name)!=sha:raise ValueError(f'E6 artifact changed: {name}')
+    return summary
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', type=Path, default=ROOT/'outputs/paper_full')
+    parser.add_argument('--source', type=Path, default=ROOT/'outputs/paper_full_nonconstant_v2_matured')
     parser.add_argument('--archive', type=Path, default=ROOT/'outputs/paper_weekly_archive')
-    parser.add_argument('--output-dir', type=Path, default=ROOT/'outputs/experiment_6')
+    parser.add_argument('--output-dir', type=Path, default=ROOT/'outputs/experiment_6_nonconstant_v2_matured')
     parser.add_argument('--execute-notebook', action='store_true')
     args = parser.parse_args()
     if args.execute_notebook:
