@@ -28,9 +28,11 @@ class DirectForecast:
             raise ValueError('SHAP inputs must be finite nonnegative count histories')
         rows = []
         for history in histories:
-            values, _ = self.engine.variants(history, self.frozen['temperature'], self.frozen['beta'])
-            robust, original = values['M3'][self.horizon-1], values['M0'][self.horizon-1]
-            if self.policy is not None:
+            if self.policy is None:
+                values, _ = self.engine.variants(history,self.frozen['temperature'],self.frozen['beta'])
+                robust,original=values['M3'][self.horizon-1],values['M0'][self.horizon-1]
+            else:
+                original=self.engine.match(history).baseline[self.horizon-1]
                 robust=self.policy.forecast(self.engine,history,self.rho)[0][self.horizon-1]
             if self.reference_engine is not None:
                 original = self.reference_engine.match(history).baseline[self.horizon-1]
@@ -60,18 +62,26 @@ def background_histories(synthetic, length, observed_history, count, seed):
     return np.array([z*level/max(float(z.mean()), np.finfo(float).tiny) for z in (available[i] for i in chosen)])
 
 
-def choose_cases(cases, predictions, horizon, maximum):
+def choose_cases(cases, predictions, horizon, maximum,baseline_model='M0',forecast_model='M3'):
     allowed = {c.case_id: c for c in cases}
     table = predictions.loc[predictions.case_id.isin(allowed) & predictions.horizon.eq(horizon)]
     point = table.pivot(index='case_id', columns='model', values='prediction')
     context = table.drop_duplicates('case_id').set_index('case_id')
-    gain = (point.M0-context.actual).abs()-(point.M3-context.actual).abs()
-    labels = {'improved': gain.idxmax(), 'worse': gain.idxmin(),
+    gain = (point[baseline_model]-context.actual).abs()-(point[forecast_model]-context.actual).abs()
+    labels = {
               'rising': context.loc[context.phase.eq('rising'), 'growth_rate'].idxmax()
                         if context.phase.eq('rising').any() else context.dispersion.idxmax(),
               'high_disagreement': context.dispersion.idxmax()}
+    if gain.max()>0:labels['improved']=gain.idxmax()
+    if gain.min()<0:labels['worse']=gain.idxmin()
+    if context.phase.eq('declining').any():labels['declining']=context.loc[context.phase.eq('declining'),'growth_rate'].idxmin()
     # Four explanation roles may refer to the same case. Record this explicitly.
     selected = list(dict.fromkeys(labels.values()))
+    # Prefer additional history lengths when roles overlap.
+    for length in sorted(context.history_length.unique()):
+        if len(selected)>=maximum:break
+        if not any(allowed[i].history.size==length for i in selected):
+            selected.append(context.loc[context.history_length.eq(length)].index[0])
     for ident in context.index:
         if len(selected) >= min(maximum, len(context)):
             break
@@ -80,7 +90,7 @@ def choose_cases(cases, predictions, horizon, maximum):
     return [allowed[i] for i in selected[:maximum]], labels, gain.to_dict()
 
 
-def analogue_plot(diagnostic, predictions, path):
+def analogue_plot(diagnostic, predictions, path,baseline_model='M0',forecast_model='M3'):
     """Render saved matched paths and issued predictions; no matching required."""
     import matplotlib.pyplot as plt
     z = np.maximum(np.asarray(diagnostic['history']), 1)
@@ -94,10 +104,10 @@ def analogue_plot(diagnostic, predictions, path):
         ax.plot(np.arange(-5,5), series, color='steelblue', alpha=.2,
                 label='Original-library analogues' if i == 0 else None)
     ax.plot(np.arange(1-len(z), 1), z, 'ko-', label='Permitted vintage history')
-    for model in ['M0', 'M3']:
+    for model in [baseline_model,forecast_model]:
         group = block.loc[block.model.eq(model)].sort_values('horizon')
         ax.plot(group.horizon, group.prediction, 'o-', label=model)
-    actual = block.loc[block.model.eq('M0')].sort_values('horizon')
+    actual = block.loc[block.model.eq(baseline_model)].sort_values('horizon')
     ax.plot(actual.horizon, actual.actual, 'k--', label='Final actual (evaluation only)')
     ax.axvline(0, color='black', linestyle=':')
     ax.set(title=f'{block.region.iloc[0]}, T={len(z)}, reference {block.reference_date.iloc[0]}',
@@ -128,8 +138,10 @@ def render_explanations(out):
     import matplotlib.pyplot as plt
     import shap
     metadata = json.loads((out/'explanation_metadata.json').read_text())
-    predictions = pd.read_csv(out/'predictions.csv.gz', dtype={'case_id': str})
-    diagnostics = {row['case_id']: row for row in json.loads((out/'matching_diagnostics.json').read_text())}
+    if metadata.get('status')=='skipped_zero_adjustment':return
+    artifact_root=out/metadata.get('artifact_directory','.')
+    predictions = pd.read_csv(artifact_root/'predictions.csv.gz', dtype={'case_id': str})
+    diagnostics = {row['case_id']: row for row in json.loads((artifact_root/'matching_diagnostics.json').read_text())}
     with np.load(out/'explanations.npz', allow_pickle=False) as values:
         for i, case in enumerate(metadata['cases']):
             history = values[f'case_{i}_history']
@@ -139,7 +151,7 @@ def render_explanations(out):
                     base_values=values[f'case_{i}_base'][column], data=history, feature_names=features)
                 plot_explanation(explanation,f'{target}; T={len(history)}; h={metadata["selected_horizon"]}')
                 plt.gcf().savefig(out/f'shap_case_{i}_{target}.png', dpi=150, bbox_inches='tight'); plt.close()
-            analogue_plot(diagnostics[case['case_id']], predictions, out/f'analogues_case_{i}.png')
+            analogue_plot(diagnostics[case['case_id']], predictions, out/f'analogues_case_{i}.png',metadata.get('baseline_model','M0'),metadata.get('forecast_model','M3'))
     frame = pd.read_csv(out/'shap_values.csv')
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     for ax, target in zip(axes, ['robust_forecast', 'robust_minus_original']):
@@ -149,9 +161,13 @@ def render_explanations(out):
     fig.tight_layout(); fig.savefig(out/'shap_summary.png', dpi=150); plt.close(fig)
 
 
-def explain_experiment(engine, cases, predictions, frozen, synthetic, config, out, reference_engine=None, policy=None, rho=1.):
+def explain_experiment(engine, cases, predictions, frozen, synthetic, config, out, reference_engine=None, policy=None, rho=1.,baseline_model='M0',forecast_model='M3',artifact_directory='.'):
     import shap
-    selected, roles, gains = choose_cases(cases, predictions, config['xai']['horizon'], config['xai']['max_cases'])
+    selected, roles, gains = choose_cases(cases, predictions, config['xai']['horizon'], config['xai']['max_cases'],baseline_model,forecast_model)
+    contrast=predictions.loc[predictions.model.isin([baseline_model,forecast_model])].pivot(index=['case_id','horizon'],columns='model',values='prediction')
+    if np.array_equal(contrast[baseline_model],contrast[forecast_model]):
+        atomic_json(out/'explanation_metadata.json',dict(status='skipped_zero_adjustment',baseline_model=baseline_model,forecast_model=forecast_model,reason='No nonzero forecast change; no contrastive improvement plots generated'))
+        return
     importance, stability, metadata, value_artifacts = [], [], [], {}
     rng_state = np.random.get_state()
     np.random.seed(config['seed'])
@@ -170,6 +186,8 @@ def explain_experiment(engine, cases, predictions, frozen, synthetic, config, ou
             values = values.reshape(1, length, 2)[0]
             base = np.asarray(explainer.expected_value)
             output = wrapper(case.history)[0]
+            reported=predictions.loc[predictions.case_id.eq(case.case_id)&predictions.horizon.eq(config['xai']['horizon'])].set_index('model').prediction
+            np.testing.assert_allclose(output,[reported[forecast_model],reported[forecast_model]-reported[baseline_model]],rtol=1e-12,atol=1e-8)
             residual = float(np.max(np.abs(base+values.sum(axis=0)-output)))
             if residual > 1e-6*max(float(np.max(np.abs(output))), 1.):
                 raise ValueError('Direct SHAP additivity check failed')
@@ -201,9 +219,10 @@ def explain_experiment(engine, cases, predictions, frozen, synthetic, config, ou
     np.savez_compressed(out/'explanations.npz', **value_artifacts)
     atomic_json(out/'explanation_metadata.json', dict(
         method='Kernel SHAP of exact RobustSMOA, no surrogate', selected_horizon=config['xai']['horizon'],
-        targets=['M3 forecast count', 'M3 minus M0 count'], cases=metadata, retrospective_roles=roles,
+        targets=[f'{forecast_model} forecast count', f'{forecast_model} minus {baseline_model} count'], cases=metadata, retrospective_roles=roles,
+        baseline_model=baseline_model,forecast_model=forecast_model,artifact_directory=artifact_directory,
         contrast_reference='original library' if reference_engine is not None else 'same library, original aggregation',
-        forecast_target='synthetic-trained context policy blended with exact M0' if policy is not None else 'Robust sMOA M3',
+        forecast_target=forecast_model,
         background='Independent synthetic whole curves; whole histories rescaled to the observed input mean, never to future outcomes',
         background_curve_hashes=[r['sha256'] for r in synthetic['background_records']],
         nsamples=config['xai']['nsamples'], background_size=config['xai']['background_size'],

@@ -78,3 +78,57 @@ class RankPolicy:
         weights=self.probabilities(x)
         return convex_forecast(candidates[:,1],ranked,weights,rho),dict(features=x,candidates=candidates,
                   ranked=ranked,ordering=ordering,probabilities=weights,rho=rho)
+
+
+CORRECTION_MODELS=('original_smoa','weighted_smoa','historical_rank_policy','median_correction','selected_forecast')
+
+
+def correction_scale(frame):
+    scale=np.maximum(frame['candidate_2'].to_numpy()-frame['candidate_0'].to_numpy(),np.maximum(frame.scale.to_numpy(),1.))
+    if not np.isfinite(scale).all():raise ValueError('Nonfinite correction scale')
+    return scale
+
+
+def bounded_correction(frame,normalized,rho=1.):
+    if not 0<=rho<=1:raise ValueError('rho outside [0,1]')
+    original=frame['candidate_1'].to_numpy(float)
+    normalized=np.asarray(normalized,float)
+    if normalized.shape!=original.shape or not np.isfinite(normalized).all():raise ValueError('Invalid normalized correction')
+    if rho==0:return original.copy()
+    candidates=frame[['candidate_0','candidate_1','candidate_2']].to_numpy(float)
+    # At most one history/analogue scale, then the convex hull of all three
+    # available forecasts. No target-dependent limits or extrapolation.
+    corrected=np.clip(original+np.clip(normalized,-1.,1.)*correction_scale(frame),candidates.min(axis=1),candidates.max(axis=1))
+    return np.maximum(0.,(1-rho)*original+rho*corrected)
+
+
+def normalized_residual(frame):
+    target=(frame.actual.to_numpy()-frame.candidate_1.to_numpy())/correction_scale(frame)
+    if not np.isfinite(target).all():raise ValueError('Invalid synthetic normalized residual')
+    return target
+
+
+class MedianCorrection:
+    def __init__(self,seed=42):
+        from sklearn.ensemble import HistGradientBoostingRegressor
+        self.model=HistGradientBoostingRegressor(loss='absolute_error',max_iter=100,max_depth=3,
+                    min_samples_leaf=20,learning_rate=.05,l2_regularization=1.,early_stopping=False,random_state=seed)
+
+    def fit(self,frame):
+        if set(frame.dataset.unique())!={'synthetic_training'}:raise ValueError('Median fitting requires synthetic training only')
+        target=normalized_residual(frame)
+        strata=frame.family.astype(str)+'|'+np.digitize(frame.scale,[1000,100000]).astype(str)
+        weights=1/strata.map(strata.value_counts()).to_numpy(float)
+        self.model.fit(frame[FEATURES].to_numpy(float),target,sample_weight=weights/weights.mean())
+        return self
+
+    def predict(self,frame,rho=1.):
+        return bounded_correction(frame,self.model.predict(frame[FEATURES].to_numpy(float)),rho)
+
+    def forecast(self,engine,history,rho=1.):
+        x,candidates,ranked,ordering=candidate_features(engine,history)
+        import pandas as pd
+        frame=pd.DataFrame(x,columns=FEATURES)
+        for j in range(3):frame[f'candidate_{j}']=candidates[:,j]
+        frame['scale']=max(float(np.maximum(history,1).mean()),1.)
+        return self.predict(frame,rho),dict(features=x,candidates=candidates,normalized_correction=self.model.predict(x),rho=rho)

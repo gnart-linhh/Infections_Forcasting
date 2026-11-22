@@ -24,7 +24,7 @@ from experiments.robust.tuning import generate_independent, synthetic_cases, sel
 from experiments.robust.evaluation import paired_metrics, cluster_comparisons, uncertainty_metrics
 from experiments.runtime import atomic_json, file_hash, acquire_run_lock
 
-EXPERIMENTS = ['validation', 'early', 'ablation', 'robustness', 'probabilistic', 'xai', 'all', 'library', 'policy']
+EXPERIMENTS = ['validation', 'early', 'ablation', 'robustness', 'probabilistic', 'xai', 'all', 'library', 'policy', 'correction']
 QCOLS = ['q025', 'q100', 'q250', 'q500', 'q750', 'q900', 'q975']
 
 
@@ -50,7 +50,7 @@ def load_config(path):
     return cfg
 
 
-def forecast_cases(engine, cases, frozen, seed=42, draws=5000):
+def forecast_cases(engine, cases, frozen, seed=42, draws=5000,point_only=False):
     """Outcome-free inference: only permitted histories, frozen reference/parameters.
 
     Initial NB sizes and the original simulated median-recentring are retained.
@@ -71,7 +71,7 @@ def forecast_cases(engine, cases, frozen, seed=42, draws=5000):
             for h, value in enumerate(point, 1):
                 target = (f'step_{case.reference_date+h}' if isinstance(case.reference_date, int)
                           else (pd.Timestamp(case.reference_date)+pd.Timedelta(weeks=h)).date().isoformat())
-                q = interval_quantiles(float(value), INITIAL_SIZES[h-1],
+                q = np.full(7,np.nan) if point_only else interval_quantiles(float(value), INITIAL_SIZES[h-1],
                                        np.random.default_rng(np.random.SeedSequence([seed, key, h])),
                                        draws=draws, initial=True)
                 rows.append(dict(case_id=case.case_id, dataset=case.dataset, region=case.region,
@@ -151,6 +151,10 @@ def regenerate(out):
 
 
 def run(config, experiment='all', smoke=False, output_dir=None):
+    if experiment == 'correction':
+        if output_dir is not None:raise ValueError('Correction studies use their immutable configured root')
+        from experiments.robust.correction_experiment import run_correction
+        return run_correction(config,smoke)
     if experiment == 'policy':
         if output_dir is not None:raise ValueError('Policy studies use their configured immutable root')
         from experiments.robust.policy_experiment import run_policy

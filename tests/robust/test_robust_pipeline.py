@@ -60,7 +60,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_no_outcome_parameter_or_global_training_interface(self):
         self.assertNotIn('actual', inspect.signature(ForecastCase).parameters)
-        self.assertEqual(list(inspect.signature(forecast_cases).parameters), ['engine','cases','frozen','seed','draws'])
+        self.assertEqual(list(inspect.signature(forecast_cases).parameters), ['engine','cases','frozen','seed','draws','point_only'])
         with self.assertRaises(TypeError):
             ForecastCase('x','y','z',np.arange(6.),1,1,'early', actual=10)
 

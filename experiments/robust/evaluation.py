@@ -35,8 +35,9 @@ def interval_metrics(actual, quantiles):
     return result
 
 
-def paired_metrics(predictions, group_by=('dataset',)):
+def paired_metrics(predictions, group_by=('dataset',), models=None, baseline_model='M0'):
     from experiments.robust.method import MODELS
+    models=MODELS if models is None else tuple(models)
     if predictions.duplicated(KEYS+['model']).any():
         raise ValueError('Duplicate prediction keys')
     if predictions.groupby(KEYS).actual.nunique(dropna=False).gt(1).any():
@@ -45,14 +46,14 @@ def paired_metrics(predictions, group_by=('dataset',)):
     groups = predictions.groupby(list(group_by), dropna=False) if group_by else [((), predictions)]
     for key, block in groups:
         key = key if isinstance(key, tuple) else (key,)
-        pivot = block.pivot(index=KEYS, columns='model', values='prediction').reindex(columns=MODELS)
+        pivot = block.pivot(index=KEYS, columns='model', values='prediction').reindex(columns=models)
         valid = np.isfinite(pivot).all(axis=1) & (pivot >= 0).all(axis=1)
         pivot = pivot.loc[valid]
         if pivot.empty:
             raise ValueError('No common finite four-model sample')
         truth = block.drop_duplicates(KEYS).set_index(KEYS).actual.reindex(pivot.index)
-        baseline = point_metrics(truth, pivot.M0)['mae']
-        for model in MODELS:
+        baseline = point_metrics(truth, pivot[baseline_model])['mae']
+        for model in models:
             m = point_metrics(truth, pivot[model])
             error = pivot[model].to_numpy()-truth.to_numpy()
             m.update(model=model, requested_n=len(valid), excluded_n=int((~valid).sum()),
@@ -67,7 +68,7 @@ def paired_metrics(predictions, group_by=('dataset',)):
     return pd.DataFrame(output)
 
 
-def cluster_comparisons(predictions, seed=42, draws=500):
+def cluster_comparisons(predictions, seed=42, draws=500,baseline_model='M0'):
     result = []
     for dataset, frame in predictions.groupby('dataset'):
         pivot = frame.pivot(index=KEYS+['actual', 'region'], columns='model', values='prediction').dropna()
@@ -78,7 +79,7 @@ def cluster_comparisons(predictions, seed=42, draws=500):
         rng = np.random.default_rng(seed)
         samples = rng.integers(len(sums), size=(draws, len(sums)))
         for model in errors.columns:
-            delta = (sums[model]-sums.M0).to_numpy()
+            delta = (sums[model]-sums[baseline_model]).to_numpy()
             boot = delta[samples].sum(axis=1)/counts[samples].sum(axis=1)
             result.append(dict(dataset=dataset, model=model, n=len(errors), clusters=len(sums),
                                mae_delta_vs_original=float(delta.sum()/counts.sum()),

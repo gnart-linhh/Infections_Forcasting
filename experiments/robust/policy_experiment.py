@@ -23,10 +23,10 @@ from generator import change_point_sir
 from bank import save_packed
 
 
-def prepare_records(engine,cases,config):
+def prepare_records(engine,cases,config,point_only=False):
     rows=[];diagnostics=[]
     for case in cases:
-        base,paths=forecast_cases(engine,[case],dict(temperature=4.,beta=0.),config['seed'],config['uncertainty']['draws'])
+        base,paths=forecast_cases(engine,[case],dict(temperature=4.,beta=0.),config['seed'],config['uncertainty']['draws'],point_only=point_only)
         x,candidates,ranked,order=candidate_features(engine,case.history)
         a=base.query('model=="M0"').sort_values('horizon').reset_index(drop=True).copy()
         a['weighted']=base.query('model=="M1"').sort_values('horizon').prediction.to_numpy()
@@ -41,7 +41,8 @@ def prepare_records(engine,cases,config):
 def scores(frame,point):
     actual=frame.actual.to_numpy();point=np.asarray(point)
     return dict(**point_metrics(actual,point),nmae=float(np.mean(np.abs(point-actual)/np.maximum(frame.scale,1))),
-        severe_underprediction=float(np.mean((actual>0)&(point<.5*actual))))
+        severe_underprediction=float(np.mean((actual>0)&(point<.5*actual))),
+        severe_overprediction=float(np.mean(point>2*np.maximum(actual,1))))
 
 
 def select_policy(training,validation,config):
@@ -58,7 +59,8 @@ def select_policy(training,validation,config):
             benefit=(result['mae']<base['mae']*(1-cfg['minimum_improvement']) and result['nmae']<base['nmae']*(1-cfg['minimum_improvement'])
                      and result['rmse']<=base['rmse']*(1+cfg['rmse_tolerance'])
                      and result['severe_underprediction']<=base['severe_underprediction']+cfg['underprediction_tolerance'])
-            trials.append(dict(depth=depth,rho=rho,eligible=bool(benefit),objective=(result['mae']/max(base['mae'],np.finfo(float).eps)+result['nmae']/max(base['nmae'],np.finfo(float).eps))/2,**result))
+            conditions=dict(raw_mae=result['mae']<base['mae']*(1-cfg['minimum_improvement']),normalized_mae=result['nmae']<base['nmae']*(1-cfg['minimum_improvement']),rmse=result['rmse']<=base['rmse']*(1+cfg['rmse_tolerance']),underprediction=result['severe_underprediction']<=base['severe_underprediction']+cfg['underprediction_tolerance'])
+            trials.append(dict(depth=depth,rho=rho,eligible=bool(benefit),rejection_reasons=';'.join(k for k,v in conditions.items() if not v),objective=(result['mae']/max(base['mae'],np.finfo(float).eps)+result['nmae']/max(base['nmae'],np.finfo(float).eps))/2,**result))
     table=pd.DataFrame(trials);permitted=table.loc[table.eligible]
     if permitted.empty:
         # Select a candidate only on synthetic validation; preserve the original
@@ -67,15 +69,31 @@ def select_policy(training,validation,config):
         rho=0.
     else:
         chosen=permitted.sort_values(['objective','rho','depth']).iloc[0];rho=float(chosen.rho)
-    frozen=dict(depth=int(chosen.depth),rho=rho,seed=config['seed'],selected_on='synthetic_validation_only',
+    frozen=dict(selected_method='original_smoa' if rho==0 else 'rank_policy_blend',candidate_classifier_deployed=rho>0,depth=int(chosen.depth),rho=rho,seed=config['seed'],selected_on='synthetic_validation_only',
                 baseline_validation=base,features=FEATURES,model='RandomForestClassifier',
                 substitution='LightGBM unavailable; one shallow sklearn tree-ensemble architecture',policy=cfg,
                 training_curves=int(training.region.nunique()),validation_curves=int(validation.region.nunique()))
     return fits[int(chosen.depth)],frozen,table
 
 
-def predict_records(records,policy,rho,config):
+def point_quantiles(records,point,config):
+    """Frozen initial NB comparator; no fitted/calibrated target-disease sizes."""
     from experiments.forecasting.uncertainty import interval_quantiles,INITIAL_SIZES,QUANTILES
+    quantiles=[]
+    for row,value in zip(records.itertuples(),point):
+        rng=np.random.default_rng(np.random.SeedSequence([config['seed'],int(row.history_sha256[:8],16),int(row.horizon)]))
+        size=INITIAL_SIZES[int(row.horizon)-1]
+        if value>=1:q=interval_quantiles(float(value),size,rng,draws=config['uncertainty']['draws'],initial=True)
+        else:
+            # Same initial mean=point+1 and simulated median recentering,
+            # extended to valid nonnegative points below the legacy API floor.
+            draws=rng.negative_binomial(size,size/(size+value+1),size=config['uncertainty']['draws'])
+            q=np.quantile(draws,QUANTILES);q=value+q-q[3]
+        quantiles.append(q)
+    return np.asarray(quantiles)
+
+
+def predict_records(records,policy,rho,config):
     probability=policy.probabilities(records[FEATURES]);ranked=records[['rank_0','rank_1','rank_2']].to_numpy()
     values=dict(M0=records.prediction.to_numpy(),M1=records.weighted.to_numpy(),
                 M2=convex_forecast(records.prediction,ranked,probability,1.),
@@ -88,18 +106,7 @@ def predict_records(records,policy,rho,config):
         for j in range(3):frame[f'probability_{j}']=probability[:,j]
         frame['rho']=rho if model=='M3' else 1. if model=='M2' else 0.
         if model not in ['M0']:
-            quantiles=[]
-            for row,value in zip(records.itertuples(),point):
-                rng=np.random.default_rng(np.random.SeedSequence([config['seed'],int(row.history_sha256[:8],16),int(row.horizon)]))
-                size=INITIAL_SIZES[int(row.horizon)-1]
-                if value>=1:q=interval_quantiles(float(value),size,rng,draws=config['uncertainty']['draws'],initial=True)
-                else:
-                    # Same initial mean=point+1 and simulated median recentering,
-                    # extended to valid nonnegative points below the legacy API floor.
-                    draws=rng.negative_binomial(size,size/(size+value+1),size=config['uncertainty']['draws'])
-                    q=np.quantile(draws,QUANTILES);q=value+q-q[3]
-                quantiles.append(q)
-            frame[QCOLS]=np.asarray(quantiles)
+            frame[QCOLS]=point_quantiles(records,point,config)
             frame['uncertainty']='modified_point_frozen_initial_nb'
         parts.append(frame)
     return pd.concat(parts,ignore_index=True)
