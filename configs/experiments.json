@@ -1,0 +1,32 @@
+{
+  "seed": 42,
+  "history_lengths": [6, 8, 11],
+  "forecast_horizons": [1, 2, 3, 4],
+  "reference": {
+    "library": "outputs/reproduction_full/01_synthetic/curves.csv",
+    "packed": "outputs/experiment_2/packed/seed_0",
+    "embedding": "outputs/paper_embedding_k5_h4_omit_nonconstant_v2",
+    "closest": 4422,
+    "smoothing": "gam"
+  },
+  "weighting": {"temperatures": [0.25, 1.0, 4.0]},
+  "regularization": {"betas": [0.0, 0.1, 0.3, 1.0]},
+  "synthetic": {
+    "seeds": [0, 1, 2],
+    "validation_per_seed_family": 12,
+    "background_per_seed_family": 1,
+    "check_per_seed_family": 4,
+    "max_attempts_per_cell": 500
+  },
+  "validation": {"simplicity_tolerance": 0.01, "rmse_tolerance": 0.05, "underprediction_tolerance": 0.02},
+  "evaluation": {
+    "database": "outputs/experiment_1_nonconstant_v2/results.sqlite",
+    "design": "early",
+    "regions": null,
+    "bootstrap_draws": 500
+  },
+  "uncertainty": {"draws": 5000},
+  "xai": {"max_cases": 4, "background_size": 4, "nsamples": 64, "horizon": 4},
+  "smoke": {"regions": 2, "curves_per_seed_family": 1},
+  "output_root": "outputs/robust_smoa"
+}

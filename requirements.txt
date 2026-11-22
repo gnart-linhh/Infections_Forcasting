@@ -8,3 +8,5 @@ ipykernel
 # Experiment 1 (traditional forecasting models)
 statsmodels==0.15.0
 patsy==1.0.3
+# Final project: model-agnostic SHAP (scikit-learn is its dependency)
+shap==0.54.1

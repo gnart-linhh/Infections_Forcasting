@@ -7,3 +7,5 @@ __pycache__/
 /Infections_Forcasting/
 
 .ipynb_checkpoints/
+.pytest_cache/
+*.joblib
