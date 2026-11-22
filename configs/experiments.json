@@ -28,5 +28,7 @@
   "uncertainty": {"draws": 5000},
   "xai": {"max_cases": 4, "background_size": 4, "nsamples": 64, "horizon": 4},
   "smoke": {"regions": 2, "curves_per_seed_family": 1},
-  "output_root": "outputs/robust_smoa"
+  "output_root": "outputs/robust_smoa",
+  "library_study": {"window_budget": 100000, "change_point_curves": 2000, "augmentation_fractions": [0.25, 0.5], "stress_curves": 36},
+  "policy": {"training_per_seed_family": 32, "validation_per_seed_family": 12, "check_per_seed_family": 8, "background_per_seed_family": 1, "stress_curves": 36, "depths": [3, 5], "rhos": [0, 0.25, 0.5, 1.0], "minimum_improvement": 0.01, "rmse_tolerance": 0.05, "underprediction_tolerance": 0.02, "sensitivity_seeds": [42, 43, 44]}
 }

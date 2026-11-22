@@ -16,8 +16,10 @@ class DirectForecast:
     Two outputs share the exact same computation: the robust count forecast and
     robust-minus-original at one fixed horizon. No surrogate or stale ranking.
     """
-    def __init__(self, engine, frozen, horizon):
+    def __init__(self, engine, frozen, horizon, reference_engine=None, policy=None, rho=1.):
         self.engine, self.frozen, self.horizon = engine, frozen, horizon
+        self.reference_engine = reference_engine
+        self.policy,self.rho=policy,rho
         self.evaluations = 0
 
     def __call__(self, histories):
@@ -28,6 +30,10 @@ class DirectForecast:
         for history in histories:
             values, _ = self.engine.variants(history, self.frozen['temperature'], self.frozen['beta'])
             robust, original = values['M3'][self.horizon-1], values['M0'][self.horizon-1]
+            if self.policy is not None:
+                robust=self.policy.forecast(self.engine,history,self.rho)[0][self.horizon-1]
+            if self.reference_engine is not None:
+                original = self.reference_engine.match(history).baseline[self.horizon-1]
             rows.append([robust, robust-original])
         self.evaluations += len(histories)
         return np.asarray(rows)
@@ -84,6 +90,9 @@ def analogue_plot(diagnostic, predictions, path):
     for i, series in enumerate(paths):
         ax.plot(np.arange(-5, 5), series, color='gray', alpha=.35,
                 label='Selected anchored analogues' if i == 0 else None)
+    for i, series in enumerate(diagnostic.get('original_analogue_paths', [])):
+        ax.plot(np.arange(-5,5), series, color='steelblue', alpha=.2,
+                label='Original-library analogues' if i == 0 else None)
     ax.plot(np.arange(1-len(z), 1), z, 'ko-', label='Permitted vintage history')
     for model in ['M0', 'M3']:
         group = block.loc[block.model.eq(model)].sort_values('horizon')
@@ -95,6 +104,23 @@ def analogue_plot(diagnostic, predictions, path):
            xlabel='Weeks from last observed week (omit-bridge convention)', ylabel='Weekly counts')
     ax.legend(fontsize=8); fig.tight_layout(); fig.savefig(path, dpi=150)
     plt.close(fig)
+
+
+def plot_explanation(explanation, title):
+    """Avoid SHAP's misleading waterfall arrows for an all-zero attribution."""
+    import matplotlib.pyplot as plt
+    import shap
+    if np.all(np.asarray(explanation.values) == 0):
+        fig,ax=plt.subplots(figsize=(8,4))
+        ax.barh(explanation.feature_names,np.zeros(len(explanation.values)),color='gray')
+        ax.axvline(0,color='black',linewidth=1)
+        ax.set(xlim=(-1,1),xlabel='SHAP contribution (all values are zero)',title=title)
+        ax.text(.5,.5,'No attributed adjustment',ha='center',va='center',transform=ax.transAxes)
+        fig.tight_layout()
+    else:
+        shap.plots.waterfall(explanation,max_display=len(explanation.values),show=False)
+        plt.gcf().suptitle(title,fontsize=10)
+    return plt.gcf()
 
 
 def render_explanations(out):
@@ -111,8 +137,7 @@ def render_explanations(out):
             for column, target in enumerate(['robust_forecast', 'robust_minus_original']):
                 explanation = shap.Explanation(values=values[f'case_{i}_values'][:, column],
                     base_values=values[f'case_{i}_base'][column], data=history, feature_names=features)
-                shap.plots.waterfall(explanation, max_display=len(history), show=False)
-                plt.gcf().suptitle(f'{target}; T={len(history)}; h={metadata["selected_horizon"]}', fontsize=10)
+                plot_explanation(explanation,f'{target}; T={len(history)}; h={metadata["selected_horizon"]}')
                 plt.gcf().savefig(out/f'shap_case_{i}_{target}.png', dpi=150, bbox_inches='tight'); plt.close()
             analogue_plot(diagnostics[case['case_id']], predictions, out/f'analogues_case_{i}.png')
     frame = pd.read_csv(out/'shap_values.csv')
@@ -124,7 +149,7 @@ def render_explanations(out):
     fig.tight_layout(); fig.savefig(out/'shap_summary.png', dpi=150); plt.close(fig)
 
 
-def explain_experiment(engine, cases, predictions, frozen, synthetic, config, out):
+def explain_experiment(engine, cases, predictions, frozen, synthetic, config, out, reference_engine=None, policy=None, rho=1.):
     import shap
     selected, roles, gains = choose_cases(cases, predictions, config['xai']['horizon'], config['xai']['max_cases'])
     importance, stability, metadata, value_artifacts = [], [], [], {}
@@ -133,7 +158,7 @@ def explain_experiment(engine, cases, predictions, frozen, synthetic, config, ou
     for i, case in enumerate(selected):
         length = len(case.history)
         features = [f'week_{j-length+1}' for j in range(length)]
-        wrapper = DirectForecast(engine, frozen, config['xai']['horizon'])
+        wrapper = DirectForecast(engine, frozen, config['xai']['horizon'], reference_engine,policy,rho)
         values_by_background, base_by_background = [], []
         for repeat in range(2):
             background = background_histories(synthetic, length, case.history,
@@ -177,6 +202,8 @@ def explain_experiment(engine, cases, predictions, frozen, synthetic, config, ou
     atomic_json(out/'explanation_metadata.json', dict(
         method='Kernel SHAP of exact RobustSMOA, no surrogate', selected_horizon=config['xai']['horizon'],
         targets=['M3 forecast count', 'M3 minus M0 count'], cases=metadata, retrospective_roles=roles,
+        contrast_reference='original library' if reference_engine is not None else 'same library, original aggregation',
+        forecast_target='synthetic-trained context policy blended with exact M0' if policy is not None else 'Robust sMOA M3',
         background='Independent synthetic whole curves; whole histories rescaled to the observed input mean, never to future outcomes',
         background_curve_hashes=[r['sha256'] for r in synthetic['background_records']],
         nsamples=config['xai']['nsamples'], background_size=config['xai']['background_size'],

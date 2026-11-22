@@ -24,7 +24,7 @@ from experiments.robust.tuning import generate_independent, synthetic_cases, sel
 from experiments.robust.evaluation import paired_metrics, cluster_comparisons, uncertainty_metrics
 from experiments.runtime import atomic_json, file_hash, acquire_run_lock
 
-EXPERIMENTS = ['validation', 'early', 'ablation', 'robustness', 'probabilistic', 'xai', 'all']
+EXPERIMENTS = ['validation', 'early', 'ablation', 'robustness', 'probabilistic', 'xai', 'all', 'library', 'policy']
 QCOLS = ['q025', 'q100', 'q250', 'q500', 'q750', 'q900', 'q975']
 
 
@@ -151,6 +151,15 @@ def regenerate(out):
 
 
 def run(config, experiment='all', smoke=False, output_dir=None):
+    if experiment == 'policy':
+        if output_dir is not None:raise ValueError('Policy studies use their configured immutable root')
+        from experiments.robust.policy_experiment import run_policy
+        return run_policy(config,smoke)
+    if experiment == 'library':
+        if output_dir is not None:
+            raise ValueError('Library studies use their immutable configured output root')
+        from experiments.robust.library_study import run_library_study
+        return run_library_study(config,smoke)
     if experiment not in EXPERIMENTS:
         raise ValueError('Unknown experiment')
     started = time.perf_counter()

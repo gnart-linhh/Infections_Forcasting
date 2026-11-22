@@ -137,3 +137,47 @@ def gen_curve(curve_type,rng=None):
     if np.argmax(obs)+1<30 and not seasonal:
         obs=np.r_[rng.uniform(0,float(np.quantile(obs,.05))+1e-9,int(rng.integers(10,18))),obs]
     return SyntheticCurve(np.maximum(obs,1e-10),curve_type,cadence,scale,seasonal)
+
+
+def change_point_sir(rng, weeks=104, change_times=None, multipliers=None,
+                     reproduction=None, recovery=None, population=None, return_state=False):
+    """One susceptible pool with piecewise-constant transmission (weekly units).
+
+    Unlike independent stitched waves, transmission changes act on the same SIR
+    state. No new observation noise is added. Weekly incidence is -delta(S)*N.
+    """
+    reproduction = float(rng.uniform(.8, 3.5) if reproduction is None else reproduction)
+    recovery = float(np.exp(rng.uniform(np.log(.5), np.log(2))) if recovery is None else recovery)
+    population = float(np.exp(rng.uniform(np.log(2e5), np.log(1e8))) if population is None else population)
+    if weeks < 16 or reproduction <= 0 or recovery <= 0 or population <= 0:
+        raise ValueError('Invalid change-point SIR parameters')
+    if change_times is None:
+        change_times = sorted(rng.choice(np.arange(3, weeks-3), int(rng.integers(0, 3)), replace=False).tolist())
+    if multipliers is None:
+        multipliers = rng.uniform(.4, 2.5, len(change_times)).tolist()
+    if len(change_times) != len(multipliers) or len(set(change_times)) != len(change_times) or sorted(change_times) != list(change_times) or any(t <= 0 or t >= weeks or int(t) != t for t in change_times) or any(m <= 0 or not np.isfinite(m) for m in multipliers):
+        raise ValueError('Invalid transmission change points')
+    initial = float(np.exp(rng.uniform(np.log(1e-6), np.log(1e-3))))
+    state = np.array([1-initial, initial, 0.])
+    boundaries = [0, *change_times, weeks]
+    states = [state.copy()]; beta = reproduction*recovery
+    for segment, (start, end) in enumerate(zip(boundaries, boundaries[1:])):
+        if segment:
+            beta *= multipliers[segment-1]
+        def equations(time, value):
+            s, i, r = value
+            flow = beta*s*i
+            return [-flow, flow-recovery*i, recovery*i]
+        solution = solve_ivp(equations, (start, end), state, t_eval=np.arange(start+1, end+1),
+                             rtol=1e-8, atol=1e-11, method='RK45')
+        if not solution.success or not np.isfinite(solution.y).all():
+            raise RuntimeError('Change-point SIR integration failed')
+        states.extend(solution.y.T);state = solution.y[:, -1]
+    states = np.asarray(states)
+    if states.min() < -1e-8 or np.max(np.abs(states.sum(axis=1)-1)) > 1e-6:
+        raise ArithmeticError('Invalid SIR state or conservation')
+    incidence = np.maximum(0, -np.diff(states[:, 0])*population)
+    curve = SyntheticCurve(np.rint(incidence), 'change_point_sir', 'weekly', 'counts', False)
+    metadata = dict(change_times=list(change_times), multipliers=list(multipliers), reproduction=reproduction,
+                    recovery=recovery, population=population, initial_infected=initial, weeks=weeks)
+    return (curve, states, metadata) if return_state else curve

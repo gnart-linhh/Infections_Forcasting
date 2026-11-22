@@ -32,13 +32,16 @@ def eligible(curve):
     return start if len(z)-start >= 15 else None
 
 
-def generate_independent(config, reference_hashes, reference_provenance, root, smoke=False):
+def generate_independent(config, reference_hashes, reference_provenance, root, smoke=False,
+                         role_counts=None, namespace=NAMESPACE):
     """Curve-level separation, independent SeedSequence roles, exact content audit."""
-    counts = {name: config['synthetic'][name+'_per_seed_family'] for name in ROLES}
+    roles = ROLES if role_counts is None else {name:i for i,name in enumerate(role_counts)}
+    counts = ({name: config['synthetic'][name+'_per_seed_family'] for name in roles}
+              if role_counts is None else dict(role_counts))
     if smoke:
         counts = {name: min(count, config['smoke']['curves_per_seed_family']) for name, count in counts.items()}
     identity = dict(seed=config['seed'], seeds=config['synthetic']['seeds'], counts=counts,
-                    attempts=config['synthetic']['max_attempts_per_cell'], namespace=NAMESPACE,
+                    attempts=config['synthetic']['max_attempts_per_cell'], namespace=namespace,
                     generator=file_hash(ROOT/'experiments/synthetic/generator.py'),
                     implementation=file_hash(Path(__file__)), reference=reference_provenance['library_sha256'])
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
@@ -49,21 +52,21 @@ def generate_independent(config, reference_hashes, reference_provenance, root, s
             meta = json.loads((folder/'metadata.json').read_text())
             if meta['identity'] != identity:
                 raise ValueError('Synthetic cache configuration mismatch')
-            for role in ROLES:
+            for role in roles:
                 if file_hash(folder/(role+'.npz')) != meta['artifacts'][role]:
                     raise ValueError('Modified synthetic cache')
                 meta[role] = load_packed(folder/(role+'.npz'))
-            verify_disjoint(meta, reference_hashes)
+            verify_disjoint(meta, reference_hashes, roles, namespace)
             return meta, folder
 
         audit, metadata, used = [], {}, set(reference_hashes)
-        for role, role_number in ROLES.items():
+        for role, role_number in roles.items():
             curves, records = [], []
             for replicate in config['synthetic']['seeds']:
                 for family_index, family in enumerate(FAMILIES):
                     accepted = 0
                     for attempt in range(config['synthetic']['max_attempts_per_cell']):
-                        key = [config['seed'], NAMESPACE, role_number, replicate, family_index, attempt]
+                        key = [config['seed'], namespace, role_number, replicate, family_index, attempt]
                         curve = gen_curve(family, np.random.default_rng(np.random.SeedSequence(key)))
                         onset = eligible(curve)
                         content = array_hash(curve.ts) if curve is not None else None
@@ -85,19 +88,19 @@ def generate_independent(config, reference_hashes, reference_provenance, root, s
             metadata[role+'_records'] = records
             metadata[role] = curves
             print(f'Generated independent {role}: {len(curves)} whole weekly count curves', flush=True)
-        verify_disjoint(metadata, reference_hashes)
+        verify_disjoint(metadata, reference_hashes, roles, namespace)
         pd.DataFrame(audit).to_json(folder/'generation_audit.jsonl.gz', orient='records', lines=True)
         saved = {k: v for k, v in metadata.items() if k.endswith('_records')}
         saved.update(identity=identity, reference_overlap=0, role_overlap=0,
-                     artifacts={role: file_hash(folder/(role+'.npz')) for role in ROLES})
+                     artifacts={role: file_hash(folder/(role+'.npz')) for role in roles})
         atomic_json(folder/'metadata.json', saved)
         metadata.update(saved)
         return metadata, folder
 
 
-def verify_disjoint(metadata, reference_hashes):
+def verify_disjoint(metadata, reference_hashes, roles=ROLES, namespace=NAMESPACE):
     used = set(reference_hashes)
-    for role in ROLES:
+    for role in roles:
         curves, records = metadata[role], metadata[role+'_records']
         if len(curves) != len(records):
             raise ValueError('Synthetic provenance count mismatch')
@@ -105,7 +108,7 @@ def verify_disjoint(metadata, reference_hashes):
             digest = array_hash(curve.ts)
             if digest != record['sha256'] or digest in used:
                 raise ValueError('Synthetic curves overlap reference/other roles or changed content')
-            if record['seed_key'][1:3] != [NAMESPACE, ROLES[role]]:
+            if record['seed_key'][1:3] != [namespace, roles[role]]:
                 raise ValueError('Invalid independent RNG namespace')
             used.add(digest)
 
